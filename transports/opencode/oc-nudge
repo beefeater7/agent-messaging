@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+targets_file=${OC_NUDGE_TARGETS:-$script_dir/targets.local.tsv}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  oc-nudge --from FROM_ALIAS TARGET_ALIAS MESSAGE...
+  oc-nudge --from-server URL --from-session ID TARGET_ALIAS MESSAGE...
+  oc-nudge --from-server URL --from-session ID --to-server URL --to-session ID MESSAGE...
+  oc-nudge --list-targets
+
+Environment:
+  OC_NUDGE_TARGETS       Target table path (default: targets.local.tsv next to this script)
+  OC_NUDGE_FROM          Default sender alias
+  OC_NUDGE_FROM_SERVER   Default sender OpenCode server URL
+  OC_NUDGE_FROM_SESSION  Default sender OpenCode session ID
+  OC_NUDGE_TIMEOUT       Curl timeout in seconds (default: 15)
+
+Target table format:
+  alias  server-url  session-id
+
+Examples:
+  oc-nudge --from nixos thinkpad "please check status"
+  oc-nudge --from-server http://nixos.local:1234 --from-session ses_abc thinkpad "hello"
+  oc-nudge --from-server http://nixos.local:1234 --from-session ses_abc \
+    --to-server http://192.168.0.23:2341 --to-session ses_def "hello"
+EOF
+}
+
+die() {
+  printf 'oc-nudge: %s\n' "$*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+json_escape() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//"/\\"}
+  value=${value//$'\b'/\\b}
+  value=${value//$'\f'/\\f}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '%s' "$value"
+}
+
+json_string() {
+  printf '"%s"' "$(json_escape "$1")"
+}
+
+lookup_route() {
+  local alias=$1 name server session rest
+
+  [[ -f "$targets_file" ]] || die "target table not found: $targets_file"
+
+  while read -r name server session rest || [[ -n "${name:-}" ]]; do
+    [[ -z "${name:-}" ]] && continue
+    [[ "$name" == \#* ]] && continue
+    if [[ "$name" == "$alias" ]]; then
+      [[ -n "${server:-}" && -n "${session:-}" ]] || die "target '$alias' is missing server or session"
+      printf '%s\t%s\n' "$server" "$session"
+      return
+    fi
+  done <"$targets_file"
+
+  die "unknown target alias '$alias' in $targets_file"
+}
+
+list_targets() {
+  local name server session rest
+
+  [[ -f "$targets_file" ]] || die "target table not found: $targets_file"
+
+  while read -r name server session rest || [[ -n "${name:-}" ]]; do
+    [[ -z "${name:-}" ]] && continue
+    [[ "$name" == \#* ]] && continue
+    printf '%-20s %s %s\n' "$name" "$server" "$session"
+  done <"$targets_file"
+}
+
+need_cmd curl
+
+from_alias=${OC_NUDGE_FROM:-}
+from_server=${OC_NUDGE_FROM_SERVER:-}
+from_session=${OC_NUDGE_FROM_SESSION:-}
+to_server=
+to_session=
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --targets)
+      [[ $# -ge 2 ]] || die "--targets requires a file"
+      targets_file=$2
+      shift 2
+      ;;
+    --from)
+      [[ $# -ge 2 ]] || die "--from requires an alias"
+      from_alias=$2
+      shift 2
+      ;;
+    --from-server)
+      [[ $# -ge 2 ]] || die "--from-server requires a URL"
+      from_server=$2
+      shift 2
+      ;;
+    --from-session)
+      [[ $# -ge 2 ]] || die "--from-session requires a session ID"
+      from_session=$2
+      shift 2
+      ;;
+    --to-server)
+      [[ $# -ge 2 ]] || die "--to-server requires a URL"
+      to_server=$2
+      shift 2
+      ;;
+    --to-session)
+      [[ $# -ge 2 ]] || die "--to-session requires a session ID"
+      to_session=$2
+      shift 2
+      ;;
+    --list-targets)
+      list_targets
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ -n "$from_alias" ]]; then
+  read -r alias_server alias_session < <(lookup_route "$from_alias")
+  from_server=${from_server:-$alias_server}
+  from_session=${from_session:-$alias_session}
+fi
+
+if [[ -z "$to_server" || -z "$to_session" ]]; then
+  [[ $# -ge 2 ]] || die "expected TARGET_ALIAS MESSAGE..."
+  target_alias=$1
+  shift
+  read -r to_server to_session < <(lookup_route "$target_alias")
+else
+  [[ $# -ge 1 ]] || die "expected MESSAGE..."
+fi
+
+[[ -n "$from_server" ]] || die "sender route missing: set --from or --from-server"
+[[ -n "$from_session" ]] || die "sender route missing: set --from or --from-session"
+[[ -n "$to_server" ]] || die "target route missing: set target alias or --to-server"
+[[ -n "$to_session" ]] || die "target route missing: set target alias or --to-session"
+
+if [[ "${1:-}" == "-" && $# -eq 1 ]]; then
+  message=$(cat)
+else
+  message=$*
+fi
+
+from_server=${from_server%/}
+to_server=${to_server%/}
+
+nudge=$(cat <<EOF
+From-Server: $from_server
+From-Session: $from_session
+
+$message
+
+If replying, send a new nudge to the From route. Do not use this HTTP response as the reply channel.
+EOF
+)
+
+payload=$(printf '{"parts":[{"type":"text","text":%s}]}' "$(json_string "$nudge")")
+tmp=${TMPDIR:-/tmp}/oc-nudge-response.$$
+trap 'rm -f "$tmp"' EXIT
+
+http_code=$(
+  curl -sS -o "$tmp" -w '%{http_code}' --max-time "${OC_NUDGE_TIMEOUT:-15}" \
+    -X POST "$to_server/session/$to_session/prompt_async" \
+    -H 'Content-Type: application/json' \
+    -d "$payload"
+)
+
+case "$http_code" in
+  2*)
+    printf 'Nudge sent to %s/session/%s (HTTP %s).\n' "$to_server" "$to_session" "$http_code" >&2
+    ;;
+  *)
+    printf 'oc-nudge: POST failed with HTTP %s\n' "$http_code" >&2
+    if [[ -s "$tmp" ]]; then
+      printf '%s\n' '--- response body ---' >&2
+      sed 's/^/  /' "$tmp" >&2
+    fi
+    exit 1
+    ;;
+esac

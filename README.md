@@ -1,6 +1,6 @@
 # Agent Messaging
 
-This project collects small, local-first ways for agents on separate machines to exchange messages.
+This directory is the initial persisted workspace for cross-machine agent interaction experiments.
 
 ## Goals
 
@@ -8,13 +8,13 @@ This project collects small, local-first ways for agents on separate machines to
 - Prefer transports that use software already present on the host.
 - Treat each transport as an implementation detail behind a simple message-send abstraction.
 - Preserve useful experiments in `/persist` instead of impermanent working directories like `~/Downloads`.
-- Make LAN OpenCode API messaging the main path when machines can reach each other over the network.
+- Investigate LAN OpenCode API messaging as the next promising path when machines can reach each other over the network.
 - Keep Bluetooth object push as a nearby/offline fallback transport.
 
 ## Current Transports
 
 - `transports/bluetooth/bt-msg`: sends a text message as a small file over Bluetooth.
-- LAN OpenCode API: exploratory; target shape is a named endpoint with a pinned session ID.
+- `transports/opencode/oc-nudge`: sends an async nudge into a pinned OpenCode session over HTTP.
 
 ## Open Questions
 
@@ -22,3 +22,4 @@ This project collects small, local-first ways for agents on separate machines to
 - Should session pinning live in a checked-in example config, a private local config, or both?
 - What should an agent do when a target OpenCode session is busy?
 - Should Bluetooth and LAN messages share one command eventually, or stay as separate tools?
+- Should this workspace remain one project, or split into smaller subprojects as the experiments mature?
