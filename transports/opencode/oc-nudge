@@ -161,8 +161,13 @@ else
   [[ $# -ge 1 ]] || die "expected MESSAGE..."
 fi
 
-[[ -n "$from_server" ]] || die "sender route missing: set --from or --from-server"
-[[ -n "$from_session" ]] || die "sender route missing: set --from or --from-session"
+if [[ -z "$from_server" || -z "$from_session" ]] && command -v oc-snoop >/dev/null 2>&1; then
+  from_server=${from_server:-$(oc-snoop --server)}
+  from_session=${from_session:-$(oc-snoop --session)}
+fi
+
+[[ -n "$from_server" ]] || die "sender route missing: set --from, --from-server, or install oc-snoop"
+[[ -n "$from_session" ]] || die "sender route missing: set --from, --from-session, or install oc-snoop"
 [[ -n "$to_server" ]] || die "target route missing: set target alias or --to-server"
 [[ -n "$to_session" ]] || die "target route missing: set target alias or --to-session"
 

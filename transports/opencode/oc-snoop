@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  oc-snoop                  Print server URL, session ID, and alias
+  oc-snoop --server         Print only the server URL (http://IP:PORT)
+  oc-snoop --session        Print only the session ID
+  oc-snoop --alias          Print only the local alias (hostname)
+  oc-snoop --export         Print shell export commands for OC_NUDGE_* vars
+
+Snoops the local opencode server route by:
+  1. Walking the process tree to find the opencode parent process
+  2. Extracting --port and --hostname from its command line
+  3. Resolving the local routable IP address
+  4. Querying the current opencode session ID
+
+Fallbacks (in order):
+  - Check all opencode processes on the system
+  - Scan common ports for a listening opencode server
+EOF
+}
+
+die() {
+  printf 'oc-snoop: %s\n' "$*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+# ── process tree walking ──────────────────────────────────────────
+
+find_opencode_in_tree() {
+  local pid=$1 depth=0 max_depth=20 cmdline ppid
+  while [[ $depth -lt $max_depth ]]; do
+    [[ -r /proc/$pid/cmdline ]] || break
+    cmdline=$(tr '\0' ' ' < /proc/$pid/cmdline)
+    if [[ "$cmdline" == opencode* ]]; then
+      printf '%s\t%s\n' "$pid" "$cmdline"
+      return 0
+    fi
+    ppid=$(awk '{print $4}' /proc/$pid/stat 2>/dev/null) || break
+    [[ $ppid -le 1 ]] && break
+    pid=$ppid
+    depth=$((depth + 1))
+  done
+  return 1
+}
+
+find_all_opencode() {
+  local pid cmdline
+  for pid_dir in /proc/*/; do
+    pid=${pid_dir%/}; pid=${pid##*/}
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ -r "$pid_dir/cmdline" ]] || continue
+    cmdline=$(tr '\0' ' ' < "$pid_dir/cmdline" 2>/dev/null) || continue
+    if [[ "$cmdline" == opencode* ]]; then
+      printf '%s\t%s\n' "$pid" "$cmdline"
+    fi
+  done
+}
+
+get_own_process_tree_opencode() {
+  # Walk up from our own PID's parent (the shell that forked us)
+  find_opencode_in_tree "$PPID" 2>/dev/null
+}
+
+find_most_recent_opencode() {
+  # Find the newest opencode process by start time
+  local newest_pid= newest_time=0 line pid start_time
+  while IFS=$'\t' read -r pid _; do
+    [[ -r /proc/$pid/stat ]] || continue
+    start_time=$(awk '{print $22}' /proc/$pid/stat 2>/dev/null) || continue
+    [[ $start_time -gt $newest_time ]] || continue
+    newest_time=$start_time
+    newest_pid=$pid
+  done < <(find_all_opencode)
+  [[ -n $newest_pid ]] || return 1
+  find_opencode_in_tree "$newest_pid"
+}
+
+# ── argument extraction ───────────────────────────────────────────
+
+extract_port() {
+  local cmdline=$1
+  if [[ "$cmdline" =~ --port[[:space:]]+([0-9]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+extract_hostname() {
+  local cmdline=$1
+  if [[ "$cmdline" =~ --hostname[[:space:]]+([^[:space:]]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+# ── network and session ───────────────────────────────────────────
+
+get_routable_ip() {
+  local ips ip
+  ips=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+  for ip in $ips; do
+    # Prefer 192.168.x.x or 10.x.x.x; skip docker bridges etc.
+    case "$ip" in
+      172.1[6-9].*|172.2[0-9].*|172.3[0-1].*|10.*|192.168.*) printf '%s\n' "$ip"; return 0 ;;
+    esac
+  done
+  # Fallback: first non-loopback
+  printf '%s\n' "${ips%%$'\n'*}"
+  return 0
+}
+
+get_session_id() {
+  local raw line
+  raw=$(opencode session list 2>/dev/null) || die "cannot run 'opencode session list'"
+  # Filter for lines matching ses_* format
+  line=$(printf '%s\n' "$raw" | grep -E '^ses_\S+' | head -1)
+  [[ -n $line ]] || die "no opencode sessions found"
+  printf '%s\n' "$line" | awk '{print $1}'
+}
+
+# ── port scanning fallback ────────────────────────────────────────
+
+try_port() {
+  local host=$1 port=$2
+  exec 3<>"/dev/tcp/$host/$port" 2>/dev/null || return 1
+  exec 3>&- 2>/dev/null || true
+  return 0
+}
+
+scan_common_ports() {
+  local host=${1:-127.0.0.1}
+  for port in 1234 2341 4096 8080 3000 8081 9999 9998 9997 8888; do
+    if try_port "$host" "$port"; then
+      printf '%s\n' "$port"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ── main snoop logic ──────────────────────────────────────────────
+
+snoop_route() {
+  local tree_result port= hostname= ip= session=
+
+  # Method 1: Process tree from our own parent
+  tree_result=$(get_own_process_tree_opencode || true)
+  if [[ -z $tree_result ]]; then
+    # Method 2: Most recent opencode process
+    tree_result=$(find_most_recent_opencode || true)
+  fi
+
+  local cmdline
+  if [[ -n $tree_result ]]; then
+    cmdline=${tree_result#*$'\t'}
+    port=$(extract_port "$cmdline" || true)
+    hostname=$(extract_hostname "$cmdline" || true)
+  fi
+
+  # Method 3: If no port from process tree, scan network
+  if [[ -z $port ]]; then
+    ip=$(get_routable_ip)
+    port=$(scan_common_ports "$ip" || scan_common_ports "127.0.0.1" || true)
+  fi
+
+  [[ -n $port ]] || die "could not determine opencode port"
+
+  hostname=${hostname:-0.0.0.0}
+  ip=$(get_routable_ip)
+  session=$(get_session_id)
+
+  snoop_port=$port
+  snoop_hostname=$hostname
+  snoop_ip=$ip
+  snoop_session=$session
+  snoop_alias=${OC_NUDGE_FROM:-$(hostname)}
+}
+
+# ── output ────────────────────────────────────────────────────────
+
+snoop_route
+
+server_url="http://${snoop_ip}:${snoop_port}"
+
+case "${1:-}" in
+  --server|--url)
+    printf '%s\n' "$server_url"
+    ;;
+  --session|--id)
+    printf '%s\n' "$snoop_session"
+    ;;
+  --alias|--name)
+    printf '%s\n' "$snoop_alias"
+    ;;
+  --export)
+    printf 'export OC_NUDGE_FROM_SERVER=%s\n' "$server_url"
+    printf 'export OC_NUDGE_FROM_SESSION=%s\n' "$snoop_session"
+    printf 'export OC_NUDGE_FROM=%s\n' "$snoop_alias"
+    ;;
+  --json)
+    printf '{"server":"%s","session":"%s","alias":"%s","ip":"%s","port":"%s","hostname":"%s"}\n' \
+      "$server_url" "$snoop_session" "$snoop_alias" "$snoop_ip" "$snoop_port" "$snoop_hostname"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    printf '%-16s %s\n' 'server:'  "$server_url"
+    printf '%-16s %s\n' 'session:' "$snoop_session"
+    printf '%-16s %s\n' 'alias:'   "$snoop_alias"
+    printf '%-16s %s\n' 'ip:'      "$snoop_ip"
+    printf '%-16s %s\n' 'port:'    "$snoop_port"
+    ;;
+esac
