@@ -15,6 +15,7 @@ This directory is the initial persisted workspace for cross-machine agent intera
 
 - `transports/bluetooth/bt-msg`: sends a text message as a small file over Bluetooth.
 - `transports/opencode/oc-nudge`: sends an async nudge into a pinned OpenCode session over HTTP.
+- `transports/opencode/oc-snoop`: auto-discovers local OpenCode server route (port, IP, session ID) by walking the process tree or scanning listening ports. Eliminates manual `--from-*` flags in `oc-nudge`.
 
 ## Open Questions
 
