@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bt-msg --list
+  bt-msg DEVICE MESSAGE [FILENAME]
+
+Examples:
+  bt-msg --list
+  bt-msg nixos "hello from this machine"
+  bt-msg 28:A0:6B:EF:57:03 "hello" agent-note.txt
+  printf 'multi-line\nmessage\n' | bt-msg nixos -
+
+DEVICE may be a Bluetooth alias/name, MAC address, or BlueZ object path.
+If MESSAGE is '-', the message is read from stdin.
+EOF
+}
+
+die() {
+  printf 'bt-msg: %s\n' "$*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+send_with_obexctl() {
+  local address=$1 file=$2 line pid obex_in obex_out client_ready=0 connected=0 complete=0
+
+  coproc OBEX { stdbuf -oL obexctl --timeout "${BT_MSG_TIMEOUT:-60}" 2>&1; }
+  pid=$OBEX_PID
+  obex_in=${OBEX[1]}
+  obex_out=${OBEX[0]}
+
+  while IFS= read -r -t 10 line <&"$obex_out"; do
+    if [[ "$line" == *"Client /org/bluez/obex"* ]]; then
+      client_ready=1
+      break
+    fi
+  done
+
+  if [[ "$client_ready" -ne 1 ]]; then
+    printf 'quit\n' >&"$obex_in" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    die "OBEX client did not become ready"
+  fi
+
+  printf 'connect %s opp\n' "$address" >&"$obex_in"
+  while IFS= read -r -t 20 line <&"$obex_out"; do
+    case "$line" in
+      *"Connection successful"*)
+        connected=1
+        break
+        ;;
+      *"Failed"*|*"not available"*)
+        break
+        ;;
+    esac
+  done
+
+  if [[ "$connected" -ne 1 ]]; then
+    printf 'quit\n' >&"$obex_in" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    die "OBEX connection to $address failed"
+  fi
+
+  printf 'send %s\n' "$file" >&"$obex_in"
+  while IFS= read -r -t "${BT_MSG_TRANSFER_TIMEOUT:-60}" line <&"$obex_out"; do
+    case "$line" in
+      *"Status: complete"*)
+        complete=1
+        break
+        ;;
+      *"Status: error"*|*"Failed"*)
+        break
+        ;;
+    esac
+  done
+
+  printf 'quit\n' >&"$obex_in" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+
+  [[ "$complete" -eq 1 ]] || die "OBEX transfer to $address did not complete"
+  printf 'Transfer complete.\n' >&2
+}
+
+send_file() {
+  local address=$1 name=$2 file=$3
+
+  if command -v obexctl >/dev/null 2>&1; then
+    send_with_obexctl "$address" "$file"
+  elif command -v blueman-sendto >/dev/null 2>&1; then
+    blueman-sendto -d "$address" "$file"
+  elif command -v bluetooth-sendto >/dev/null 2>&1; then
+    bluetooth-sendto --device="$address" --name="$name" "$file"
+  else
+    die "missing required command: blueman-sendto or bluetooth-sendto"
+  fi
+}
+
+prop_string() {
+  local path=$1 prop=$2 raw value
+  raw=$(busctl get-property org.bluez "$path" org.bluez.Device1 "$prop" 2>/dev/null) || return 1
+  value=${raw#s \"}
+  value=${value%\"}
+  printf '%s\n' "$value"
+}
+
+device_paths() {
+  local path rest
+  busctl tree --list org.bluez | while IFS= read -r path; do
+    case "$path" in
+      /org/bluez/hci*/dev_*)
+        rest=${path#*/dev_}
+        case "$rest" in
+          */*) ;;
+          *) printf '%s\n' "$path" ;;
+        esac
+        ;;
+    esac
+  done
+}
+
+normalize_mac() {
+  printf '%s\n' "$1" | tr '[:lower:]_-' '[:upper:]::'
+}
+
+path_to_address() {
+  local path=$1
+  prop_string "$path" Address
+}
+
+resolve_device() {
+  local ident=$1 norm path address alias name match_count=0 match_address=
+
+  case "$ident" in
+    /org/bluez/*)
+      path_to_address "$ident" || die "not a usable BlueZ device path: $ident"
+      return
+      ;;
+  esac
+
+  norm=$(normalize_mac "$ident")
+  if [[ "$norm" =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]]; then
+    printf '%s\n' "$norm"
+    return
+  fi
+
+  while IFS= read -r path; do
+    address=$(prop_string "$path" Address || true)
+    alias=$(prop_string "$path" Alias || true)
+    name=$(prop_string "$path" Name || true)
+
+    if [[ "$ident" == "$alias" || "$ident" == "$name" || "$ident" == "$address" ]]; then
+      match_count=$((match_count + 1))
+      match_address=$address
+    fi
+  done < <(device_paths)
+
+  case "$match_count" in
+    0) die "no Bluetooth device matched '$ident' (try: bt-msg --list)" ;;
+    1) printf '%s\n' "$match_address" ;;
+    *) die "multiple Bluetooth devices matched '$ident'; use a MAC address" ;;
+  esac
+}
+
+list_devices() {
+  local path address alias name paired connected trusted
+  printf '%-17s  %-20s  %-20s  %s\n' "ADDRESS" "ALIAS" "NAME" "STATE"
+  while IFS= read -r path; do
+    address=$(prop_string "$path" Address || printf '?')
+    alias=$(prop_string "$path" Alias || printf '?')
+    name=$(prop_string "$path" Name || printf '?')
+    paired=$(busctl get-property org.bluez "$path" org.bluez.Device1 Paired 2>/dev/null || printf 'b ?')
+    connected=$(busctl get-property org.bluez "$path" org.bluez.Device1 Connected 2>/dev/null || printf 'b ?')
+    trusted=$(busctl get-property org.bluez "$path" org.bluez.Device1 Trusted 2>/dev/null || printf 'b ?')
+    printf '%-17s  %-20s  %-20s  paired=%s connected=%s trusted=%s\n' \
+      "$address" "$alias" "$name" "${paired#b }" "${connected#b }" "${trusted#b }"
+  done < <(device_paths)
+}
+
+case "${1:-}" in
+  -h|--help|'')
+    usage
+    exit 0
+    ;;
+  --list)
+    list_devices
+    exit 0
+    ;;
+esac
+
+need_cmd busctl
+
+[[ $# -ge 2 && $# -le 3 ]] || die "expected DEVICE MESSAGE [FILENAME]"
+
+device=$1
+message=$2
+filename=${3:-bt-msg-$(date -u +%Y%m%dT%H%M%SZ).txt}
+filename=${filename##*/}
+[[ -n "$filename" ]] || die "filename must not be empty"
+
+address=$(resolve_device "$device")
+outdir=${BT_MSG_DIR:-/tmp/opencode/bt-msg}
+mkdir -p "$outdir"
+file=$outdir/$filename
+
+if [[ "$message" == '-' ]]; then
+  tee "$file" >/dev/null
+else
+  printf '%s\n' "$message" >"$file"
+fi
+
+printf 'Sending %s to %s...\n' "$file" "$address" >&2
+send_file "$address" "$device" "$file"
