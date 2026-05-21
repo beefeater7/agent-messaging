@@ -120,6 +120,13 @@ get_routable_ip() {
 
 get_session_id() {
   local raw line
+
+  # Prefer oc-whoami if installed (100% reliable via /session/status API)
+  if command -v oc-whoami >/dev/null 2>&1; then
+    raw=$(oc-whoami 2>/dev/null) || true
+    [[ -n $raw ]] && printf '%s\n' "$raw" && return 0
+  fi
+
   raw=$(opencode session list 2>/dev/null) || die "cannot run 'opencode session list'"
   # Filter for lines matching ses_* format
   line=$(printf '%s\n' "$raw" | grep -E '^ses_\S+' | head -1)

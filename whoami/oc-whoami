@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+toolname=$(basename "$0")
+
+usage() {
+  cat <<'EOF'
+Usage:
+  oc-whoami              Print session ID
+  oc-whoami --json       Print session ID as JSON
+  oc-whoami --export     Print shell export command
+
+Discover the OpenCode session ID that this process belongs to.
+
+Method (100% reliable):
+  OpenCode writes a "running" part row containing the tool's command text
+  before forking the process. oc-whoami queries that row from the SQLite
+  database and extracts the session_id. No API call. No guessing.
+
+Environment:
+  OC_DB   OpenCode SQLite database path (default: ~/.local/share/opencode/opencode.db)
+EOF
+}
+
+die() {
+  printf 'oc-whoami: %s\n' "$*" >&2
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+}
+
+# ── discovery ──────────────────────────────────────────────────────
+
+discover_db() {
+  local db
+  db=${OC_DB:-$HOME/.local/share/opencode/opencode.db}
+  [[ -r $db ]] || return 1
+  printf '%s\n' "$db"
+}
+
+whoami_via_db() {
+  local db session
+
+  db=$(discover_db) || return 1
+
+  session=$(sqlite3 "$db" \
+    "SELECT session_id FROM part
+     WHERE data LIKE '%${toolname}%'
+     AND data LIKE '%\"running\"%'
+     AND time_created > (strftime('%s','now') - 60) * 1000
+     ORDER BY time_created DESC LIMIT 1" 2>/dev/null)
+
+  [[ -n ${session:-} ]] || die "could not find own running part in OpenCode database"
+  [[ "$session" == ses_* ]] || die "unexpected session ID: $session"
+
+  printf '%s\n' "$session"
+}
+
+# ── main ──────────────────────────────────────────────────────────
+
+need_cmd sqlite3
+
+session=$(whoami_via_db)
+
+case "${1:-}" in
+  --json)
+    printf '{"session":"%s","method":"db"}\n' "$session"
+    ;;
+  --export)
+    printf 'export OC_NUDGE_FROM_SESSION=%s\n' "$session"
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    printf '%s\n' "$session"
+    ;;
+esac
