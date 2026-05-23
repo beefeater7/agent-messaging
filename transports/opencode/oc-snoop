@@ -145,7 +145,7 @@ try_port() {
 
 scan_common_ports() {
   local host=${1:-127.0.0.1}
-  for port in 1234 2341 4096 8080 3000 8081 9999 9998 9997 8888; do
+  for port in 4096 8080 3000 8081 9999 9998 9997 8888; do
     if try_port "$host" "$port"; then
       printf '%s\n' "$port"
       return 0

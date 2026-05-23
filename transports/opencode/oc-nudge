@@ -24,9 +24,9 @@ Target table format:
 
 Examples:
   oc-nudge --from samsung thinkpad "please check status"
-  oc-nudge --from-server http://samsung.local:4096 --from-session ses_abc thinkpad "hello"
-  oc-nudge --from-server http://samsung.local:4096 --from-session ses_abc \
-    --to-server http://thinkpad.local:4096 --to-session ses_def "hello"
+  oc-nudge --from-server http://samsung.local --from-session ses_abc thinkpad "hello"
+  oc-nudge --from-server http://samsung.local --from-session ses_abc \
+    --to-server http://thinkpad.local --to-session ses_def "hello"
 EOF
 }
 
@@ -170,6 +170,17 @@ fi
 [[ -n "$from_session" ]] || die "sender route missing: set --from, --from-session, or install oc-snoop"
 [[ -n "$to_server" ]] || die "target route missing: set target alias or --to-server"
 [[ -n "$to_session" ]] || die "target route missing: set target alias or --to-session"
+
+normalize_url() {
+  local url=$1
+  if [[ "$url" != *:*:* ]]; then
+    url="${url%/}:4096"
+  fi
+  printf '%s\n' "$url"
+}
+
+from_server=$(normalize_url "$from_server")
+to_server=$(normalize_url "$to_server")
 
 if [[ "${1:-}" == "-" && $# -eq 1 ]]; then
   message=$(cat)
