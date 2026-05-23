@@ -4,7 +4,7 @@ Date: 2026-05-20
 
 ## Target
 
-- Host: `192.168.0.23`
+- Host: `thinkpad.local` (was `192.168.0.23` originally)
 - Port: `2341`
 - Session: `ses_1be75dd3effeUNSjObL0vNjp0u`
 - Session title observed from API: `Greeting`
@@ -15,7 +15,7 @@ Date: 2026-05-20
 Endpoint:
 
 ```text
-POST http://192.168.0.23:2341/session/ses_1be75dd3effeUNSjObL0vNjp0u/message
+POST http://thinkpad.local:2341/session/ses_1be75dd3effeUNSjObL0vNjp0u/message
 ```
 
 Body:
@@ -25,7 +25,7 @@ Body:
   "parts": [
     {
       "type": "text",
-      "text": "LAN OpenCode API test from nixos at 192.168.0.x. Please reply with exactly: agent-messaging API test received"
+      "text": "LAN OpenCode API test from samsung. Please reply with exactly: agent-messaging API test received"
     }
   ]
 }

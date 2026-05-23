@@ -16,6 +16,18 @@ This directory is the initial persisted workspace for cross-machine agent intera
 - `transports/bluetooth/bt-msg`: sends a text message as a small file over Bluetooth.
 - `transports/opencode/oc-nudge`: sends an async nudge into a pinned OpenCode session over HTTP.
 - `transports/opencode/oc-snoop`: auto-discovers local OpenCode server route (port, IP, session ID) by walking the process tree or scanning listening ports. Eliminates manual `--from-*` flags in `oc-nudge`.
+- `whoami/oc-whoami`: 100% DB-based session ID discovery by matching its own "running" part in the SQLite database.
+
+## Hostname Policy
+
+Lazy brand-name policy: change hostname to machine brand when convenient.
+
+```
+nixos      →  samsung  (Samsung laptop)
+erik-...   →  thinkpad (Lenovo ThinkPad)
+```
+
+Use `.local` hostnames everywhere — never hardcode LAN IPs. Avahi/mDNS handles resolution automatically when subnets change.
 
 ## Open Questions
 

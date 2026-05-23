@@ -23,10 +23,10 @@ Target table format:
   alias  server-url  session-id
 
 Examples:
-  oc-nudge --from nixos thinkpad "please check status"
-  oc-nudge --from-server http://nixos.local:1234 --from-session ses_abc thinkpad "hello"
-  oc-nudge --from-server http://nixos.local:1234 --from-session ses_abc \
-    --to-server http://192.168.0.23:2341 --to-session ses_def "hello"
+  oc-nudge --from samsung thinkpad "please check status"
+  oc-nudge --from-server http://samsung.local:1234 --from-session ses_abc thinkpad "hello"
+  oc-nudge --from-server http://samsung.local:1234 --from-session ses_abc \
+    --to-server http://thinkpad.local:2341 --to-session ses_def "hello"
 EOF
 }
 

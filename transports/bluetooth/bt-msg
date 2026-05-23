@@ -9,9 +9,9 @@ Usage:
 
 Examples:
   bt-msg --list
-  bt-msg nixos "hello from this machine"
+  bt-msg samsung "hello from this machine"
   bt-msg 28:A0:6B:EF:57:03 "hello" agent-note.txt
-  printf 'multi-line\nmessage\n' | bt-msg nixos -
+  printf 'multi-line\nmessage\n' | bt-msg samsung -
 
 DEVICE may be a Bluetooth alias/name, MAC address, or BlueZ object path.
 If MESSAGE is '-', the message is read from stdin.

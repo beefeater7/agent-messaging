@@ -19,9 +19,9 @@ or without aliases:
 
 ```bash
 oc-nudge \
-  --from-server http://nixos.local:1234 \
+  --from-server http://samsung.local:1234 \
   --from-session ses_sender \
-  --to-server http://192.168.0.23:2341 \
+  --to-server http://thinkpad.local:2341 \
   --to-session ses_recipient \
   "message"
 ```
