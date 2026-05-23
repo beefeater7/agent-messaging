@@ -24,9 +24,9 @@ Target table format:
 
 Examples:
   oc-nudge --from samsung thinkpad "please check status"
-  oc-nudge --from-server http://samsung.local:1234 --from-session ses_abc thinkpad "hello"
-  oc-nudge --from-server http://samsung.local:1234 --from-session ses_abc \
-    --to-server http://thinkpad.local:2341 --to-session ses_def "hello"
+  oc-nudge --from-server http://samsung.local:4096 --from-session ses_abc thinkpad "hello"
+  oc-nudge --from-server http://samsung.local:4096 --from-session ses_abc \
+    --to-server http://thinkpad.local:4096 --to-session ses_def "hello"
 EOF
 }
 

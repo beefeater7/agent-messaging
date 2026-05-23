@@ -5,7 +5,7 @@ Date: 2026-05-20
 ## Target
 
 - Host: `thinkpad.local` (was `192.168.0.23` originally)
-- Port: `2341`
+- Port: `4096` (openCode default)
 - Session: `ses_1be75dd3effeUNSjObL0vNjp0u`
 - Session title observed from API: `Greeting`
 - Session directory observed from API: `/home/erikj`
@@ -15,7 +15,7 @@ Date: 2026-05-20
 Endpoint:
 
 ```text
-POST http://thinkpad.local:2341/session/ses_1be75dd3effeUNSjObL0vNjp0u/message
+POST http://thinkpad.local:4096/session/ses_1be75dd3effeUNSjObL0vNjp0u/message
 ```
 
 Body:

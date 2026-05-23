@@ -6,9 +6,9 @@ Date: 2026-05-20
 
 ```bash
 /persist/projects/agent-messaging/transports/opencode/oc-nudge \
-  --from-server http://samsung.local:1234 \
+  --from-server http://samsung.local:4096 \
   --from-session ses_1be0ecdc7ffeprbWm0Q81O0ZYI \
-  --to-server http://thinkpad.local:2341 \
+  --to-server http://thinkpad.local:4096 \
   --to-session ses_1be75dd3effeUNSjObL0vNjp0u \
   "Async oc-nudge smoke test from NixOS. No reply required."
 ```
@@ -18,7 +18,7 @@ Date: 2026-05-20
 `oc-nudge` posted to the async OpenCode endpoint and returned immediately:
 
 ```text
-Nudge sent to http://thinkpad.local:2341/session/ses_1be75dd3effeUNSjObL0vNjp0u (HTTP 204).
+Nudge sent to http://thinkpad.local:4096/session/ses_1be75dd3effeUNSjObL0vNjp0u (HTTP 204).
 ```
 
 ## Notes
