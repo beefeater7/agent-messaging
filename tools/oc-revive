@@ -13,6 +13,7 @@ set -euo pipefail
 
 NAME="oc-revive"
 LOCK="/tmp/${NAME}.pid"
+SESSIONS_FILE="/tmp/${NAME}.sessions"
 die() { printf '%s: %s\n' "$NAME" "$*" >&2; exit 1; }
 
 if [[ "${1:-}" == "--kill" ]]; then
@@ -36,7 +37,17 @@ nohup bash -c "
   while ss -ltn 2>/dev/null | grep -q ':$port '; do
     sleep 1
   done
-  opencode serve --hostname 0.0.0.0 --port $port
+  opencode serve --hostname 0.0.0.0 --port $port &
+  # Wait for server to be ready, then create a session for reattachment
+  for _ in \$(seq 1 30); do
+    if curl -s --max-time 2 http://127.0.0.1:$port/session/status >/dev/null 2>&1; then
+      sid=\$(curl -s --max-time 5 -X POST http://127.0.0.1:$port/session -H 'Content-Type: application/json' -d '{\"title\":\"revived session\"}' 2>/dev/null | grep -o '\"id\":\"ses_[^\"]*\"' | head -1 | sed 's/\"id\":\"//;s/\"//')
+      printf 'http://localhost:%s %s\n' \"\$port\" \"\${sid:-unknown}\" > '$SESSIONS_FILE'
+      break
+    fi
+    sleep 1
+  done
+  wait
 " &>/dev/null &
 
 pid=$!
