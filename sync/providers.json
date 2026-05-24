@@ -1,6 +1,0 @@
-{
-  "disabled_providers": [
-    "opencode-go",
-    "berget"
-  ]
-}
