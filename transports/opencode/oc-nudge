@@ -118,13 +118,15 @@ send_nudge() {
   local model=${6:-}
 
   local nudge
+  local from_host=${from_server#*://}
+  from_host=${from_host%%:*}
+  from_host=${from_host%/}
+  local model_suffix=""
+  [[ -n "${model:-}" ]] && model_suffix=" · ${model}"
   nudge=$(cat <<EOF
-From-Server: $from_server
-From-Session: $from_session
-$( [[ -n "$model" ]] && printf 'Model: %s\n' "$model" )
-$message
+[← $from_host $from_session$model_suffix]
 
-If replying, send a new nudge to the From route. Do not use this HTTP response as the reply channel.
+$message
 EOF
   )
 
