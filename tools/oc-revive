@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# oc-revive: restart the local OpenCode server gracefully
+#
+# Launch THIS before killing your OC process.
+# It waits for the port to free, then starts a new instance.
+#
+# Usage:
+#   oc-revive            # auto-discovers port via oc-snoop
+#   oc-revive 4096       # explicit port
+
+set -euo pipefail
+
+port=${1:-}
+if [[ -z "$port" ]]; then
+  port=$(oc-snoop --server 2>/dev/null | grep -oE '[0-9]+$') || true
+fi
+port=${port:-4096}
+
+nohup bash -c "
+  while ss -ltn 2>/dev/null | grep -q ':$port '; do
+    sleep 1
+  done
+  opencode serve --hostname 0.0.0.0 --port $port
+" &>/dev/null &
+
+pid=$!
+disown $pid 2>/dev/null || true
+
+printf 'oc-revive: armed on port %s (pid %s). Safe to kill OC.\n' "$port" "$pid"
