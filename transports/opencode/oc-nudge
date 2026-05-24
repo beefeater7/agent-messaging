@@ -7,15 +7,17 @@ targets_file=${OC_NUDGE_TARGETS:-$script_dir/targets.local.tsv}
 usage() {
   cat <<'EOF'
 Usage:
-  oc-nudge [--from FROM_ALIAS] [--new] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
-  oc-nudge --from-server URL --from-session ID [--new] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge [--from FROM_ALIAS] [--new] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge --from-server URL --from-session ID [--new] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
   oc-nudge --from-server URL --from-session ID --to-server URL --to-session ID MESSAGE...
   oc-nudge --list-targets
 
 Options:
   --new          Create a new session on the target server instead of using the
                  existing one. Reports the new session ID back to stdout.
-                 Recipients see the new session ID in the nudge body.
+  --model NAME   Specify the provider to use on the target side (e.g., deepseek).
+                 Adds a Model: header to the nudge body and passes providerID
+                 in the API request so the recipient agent uses the right model.
 
 Environment:
   OC_NUDGE_TARGETS       Target table path (default: targets.local.tsv next to this script)
@@ -31,6 +33,7 @@ Examples:
   oc-nudge --from samsung thinkpad "please check status"
   oc-nudge --from samsung hp thinkpad "status check"      # multi-recipient
   oc-nudge --new thinkpad "wake up"                       # new session on target
+  oc-nudge --model deepseek thinkpad "status"              # force provider
   oc-nudge --from-server http://samsung.local --from-session ses_abc thinkpad "hello"
   oc-nudge --from-server http://samsung.local --from-session ses_abc \
     --to-server http://thinkpad.local --to-session ses_def "hello"
@@ -112,20 +115,32 @@ normalize_url() {
 
 send_nudge() {
   local from_server=$1 from_session=$2 to_server=$3 to_session=$4 message=$5
+  local model=${6:-}
 
   local nudge
   nudge=$(cat <<EOF
 From-Server: $from_server
 From-Session: $from_session
-
+$( [[ -n "$model" ]] && printf 'Model: %s\n' "$model" )
 $message
 
 If replying, send a new nudge to the From route. Do not use this HTTP response as the reply channel.
 EOF
   )
 
-  local payload http_code
-  payload=$(printf '{"parts":[{"type":"text","text":%s}]}' "$(json_string "$nudge")")
+  local http_code
+  payload=$(printf '{"parts":[{"type":"text","text":%s}]' "$(json_string "$nudge")")
+  if [[ -n "$model" ]]; then
+    local provider=${model%/*} model_id=${model#*/}
+    if [[ "$provider" == "$model" ]]; then
+      # Only provider given; let server pick default model
+      payload=$(printf '{"model":{"providerID":"%s"},"parts":[{"type":"text","text":%s}]}' "$provider" "$(json_string "$nudge")")
+    else
+      payload=$(printf '{"model":{"providerID":"%s","modelID":"%s"},"parts":[{"type":"text","text":%s}]}' "$provider" "$model_id" "$(json_string "$nudge")")
+    fi
+  else
+    payload=$(printf '{"parts":[{"type":"text","text":%s}]}' "$(json_string "$nudge")")
+  fi
   tmp=${TMPDIR:-/tmp}/oc-nudge-response.$$
   trap 'rm -f "$tmp"' RETURN
 
@@ -176,6 +191,7 @@ from_session=${OC_NUDGE_FROM_SESSION:-}
 to_server=
 to_session=
 new_session=0
+model=
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -216,6 +232,11 @@ while [[ $# -gt 0 ]]; do
     --new)
       new_session=1
       shift
+      ;;
+    --model)
+      [[ $# -ge 2 ]] || die "--model requires a provider name"
+      model=$2
+      shift 2
       ;;
     --list-targets)
       list_targets
@@ -310,7 +331,7 @@ errors=0
 for target in "${targets[@]}"; do
   t_server=${target%%$'\t'*}
   t_session=${target##*$'\t'}
-  send_nudge "$from_server" "$from_session" "$t_server" "$t_session" "$message" || errors=$((errors + 1))
+  send_nudge "$from_server" "$from_session" "$t_server" "$t_session" "$message" "$model" || errors=$((errors + 1))
 done
 
 exit $(( errors > 0 ? 1 : 0 ))
