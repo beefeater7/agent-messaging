@@ -7,8 +7,24 @@
 # Usage:
 #   oc-revive            # auto-discovers port via oc-snoop
 #   oc-revive 4096       # explicit port
+#   oc-revive --kill     # kill a running reviver
 
 set -euo pipefail
+
+NAME="oc-revive"
+LOCK="/tmp/${NAME}.pid"
+die() { printf '%s: %s\n' "$NAME" "$*" >&2; exit 1; }
+
+if [[ "${1:-}" == "--kill" ]]; then
+  if [[ -f "$LOCK" ]]; then
+    read -r pid < "$LOCK"
+    kill "$pid" 2>/dev/null && rm -f "$LOCK" && die "killed reviver $pid"
+    rm -f "$LOCK"
+  fi
+  pid=$(pgrep -f "[o]c-revive.*wait" 2>/dev/null | head -1) || true
+  [[ -n "$pid" ]] && kill "$pid" 2>/dev/null && die "killed orphan reviver $pid"
+  die "no reviver found"
+fi
 
 port=${1:-}
 if [[ -z "$port" ]]; then
@@ -25,5 +41,5 @@ nohup bash -c "
 
 pid=$!
 disown $pid 2>/dev/null || true
-
-printf 'oc-revive: armed on port %s (pid %s). Safe to kill OC.\n' "$port" "$pid"
+printf '%s\n' "$pid" > "$LOCK"
+printf '%s: armed on port %s (pid %s). Safe to kill OC.\n' "$NAME" "$port" "$pid"
