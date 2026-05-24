@@ -7,10 +7,15 @@ targets_file=${OC_NUDGE_TARGETS:-$script_dir/targets.local.tsv}
 usage() {
   cat <<'EOF'
 Usage:
-  oc-nudge --from FROM_ALIAS TARGET_ALIAS MESSAGE...
-  oc-nudge --from-server URL --from-session ID TARGET_ALIAS MESSAGE...
+  oc-nudge [--from FROM_ALIAS] [--new] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge --from-server URL --from-session ID [--new] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
   oc-nudge --from-server URL --from-session ID --to-server URL --to-session ID MESSAGE...
   oc-nudge --list-targets
+
+Options:
+  --new          Create a new session on the target server instead of using the
+                 existing one. Reports the new session ID back to stdout.
+                 Recipients see the new session ID in the nudge body.
 
 Environment:
   OC_NUDGE_TARGETS       Target table path (default: targets.local.tsv next to this script)
@@ -24,6 +29,8 @@ Target table format:
 
 Examples:
   oc-nudge --from samsung thinkpad "please check status"
+  oc-nudge --from samsung hp thinkpad "status check"      # multi-recipient
+  oc-nudge --new thinkpad "wake up"                       # new session on target
   oc-nudge --from-server http://samsung.local --from-session ses_abc thinkpad "hello"
   oc-nudge --from-server http://samsung.local --from-session ses_abc \
     --to-server http://thinkpad.local --to-session ses_def "hello"
@@ -73,6 +80,16 @@ lookup_route() {
   die "unknown target alias '$alias' in $targets_file"
 }
 
+is_known_alias() {
+  local alias=$1 name
+  [[ -f "$targets_file" ]] || return 1
+  while read -r name _ __ || [[ -n "${name:-}" ]]; do
+    [[ -z "${name:-}" || "$name" == \#* ]] && continue
+    [[ "$name" == "$alias" ]] && return 0
+  done <"$targets_file"
+  return 1
+}
+
 list_targets() {
   local name server session rest
 
@@ -85,6 +102,72 @@ list_targets() {
   done <"$targets_file"
 }
 
+normalize_url() {
+  local url=$1
+  if [[ "$url" != *:*:* ]]; then
+    url="${url%/}:4096"
+  fi
+  printf '%s\n' "$url"
+}
+
+send_nudge() {
+  local from_server=$1 from_session=$2 to_server=$3 to_session=$4 message=$5
+
+  local nudge
+  nudge=$(cat <<EOF
+From-Server: $from_server
+From-Session: $from_session
+
+$message
+
+If replying, send a new nudge to the From route. Do not use this HTTP response as the reply channel.
+EOF
+  )
+
+  local payload http_code
+  payload=$(printf '{"parts":[{"type":"text","text":%s}]}' "$(json_string "$nudge")")
+  tmp=${TMPDIR:-/tmp}/oc-nudge-response.$$
+  trap 'rm -f "$tmp"' RETURN
+
+  http_code=$(
+    curl -sS -o "$tmp" -w '%{http_code}' --max-time "${OC_NUDGE_TIMEOUT:-15}" \
+      -X POST "$to_server/session/$to_session/prompt_async" \
+      -H 'Content-Type: application/json' \
+      -d "$payload"
+  )
+
+  case "$http_code" in
+    2*)
+      printf 'Nudge sent to %s/session/%s (HTTP %s).\n' "$to_server" "$to_session" "$http_code" >&2
+      return 0
+      ;;
+    *)
+      printf 'oc-nudge: POST failed to %s/session/%s with HTTP %s\n' "$to_server" "$to_session" "$http_code" >&2
+      if [[ -s "$tmp" ]]; then
+        printf '%s\n' '--- response body ---' >&2
+        sed 's/^/  /' "$tmp" >&2
+      fi
+      return 1
+      ;;
+  esac
+}
+
+create_session() {
+  local server=$1 title=${2:-nudge}
+
+  local resp session
+  resp=$(curl -sS --max-time "${OC_NUDGE_TIMEOUT:-15}" \
+    -X POST "$server/session" \
+    -H 'Content-Type: application/json' \
+    -d "{\"title\":\"$title\"}" 2>/dev/null) || die "failed to create session on $server"
+
+  session=$(printf '%s\n' "$resp" | grep -o '"id":"ses_[^"]*"' | head -1 | sed 's/"id":"//;s/"//')
+
+  [[ -n ${session:-} ]] || die "could not parse session ID from response: $resp"
+
+  printf '%s\n' "$session"
+}
+
 need_cmd curl
 
 from_alias=${OC_NUDGE_FROM:-}
@@ -92,6 +175,7 @@ from_server=${OC_NUDGE_FROM_SERVER:-}
 from_session=${OC_NUDGE_FROM_SESSION:-}
 to_server=
 to_session=
+new_session=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -129,6 +213,10 @@ while [[ $# -gt 0 ]]; do
       to_session=$2
       shift 2
       ;;
+    --new)
+      new_session=1
+      shift
+      ;;
     --list-targets)
       list_targets
       exit 0
@@ -146,21 +234,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Resolve from route
 if [[ -n "$from_alias" ]]; then
   read -r alias_server alias_session < <(lookup_route "$from_alias")
   from_server=${from_server:-$alias_server}
   from_session=${from_session:-$alias_session}
 fi
 
-if [[ -z "$to_server" || -z "$to_session" ]]; then
-  [[ $# -ge 2 ]] || die "expected TARGET_ALIAS MESSAGE..."
-  target_alias=$1
-  shift
-  read -r to_server to_session < <(lookup_route "$target_alias")
-else
-  [[ $# -ge 1 ]] || die "expected MESSAGE..."
-fi
-
+# Auto-snoop if needed
 if [[ -z "$from_server" || -z "$from_session" ]] && command -v oc-snoop >/dev/null 2>&1; then
   from_server=${from_server:-$(oc-snoop --server)}
   from_session=${from_session:-$(oc-snoop --session)}
@@ -168,60 +249,68 @@ fi
 
 [[ -n "$from_server" ]] || die "sender route missing: set --from, --from-server, or install oc-snoop"
 [[ -n "$from_session" ]] || die "sender route missing: set --from, --from-session, or install oc-snoop"
-[[ -n "$to_server" ]] || die "target route missing: set target alias or --to-server"
-[[ -n "$to_session" ]] || die "target route missing: set target alias or --to-session"
-
-normalize_url() {
-  local url=$1
-  if [[ "$url" != *:*:* ]]; then
-    url="${url%/}:4096"
-  fi
-  printf '%s\n' "$url"
-}
-
 from_server=$(normalize_url "$from_server")
-to_server=$(normalize_url "$to_server")
+from_server=${from_server%/}
 
+# Parse recipients and message
+targets=()
+
+if [[ -n "$to_server" && -n "$to_session" ]]; then
+  # Explicit --to-server / --to-session: single recipient, remainder is message
+  to_server=$(normalize_url "$to_server")
+  to_server=${to_server%/}
+  [[ $# -ge 1 ]] || die "expected MESSAGE..."
+  targets+=("$to_server"$'\t'"$to_session")
+else
+  # Alias-based: collect all known aliases before the message
+  [[ $# -ge 2 ]] || die "expected TARGET_ALIAS [TARGET_ALIAS...] MESSAGE..."
+
+  while [[ $# -gt 1 ]]; do
+    if is_known_alias "$1"; then
+      s= r=
+      read -r s r < <(lookup_route "$1")
+      targets+=("$(normalize_url "$s")"$'\t'"$r")
+      shift
+    else
+      break
+    fi
+  done
+
+  [[ ${#targets[@]} -gt 0 ]] || die "no valid target aliases found"
+  [[ $# -ge 1 ]] || die "expected MESSAGE..."
+fi
+
+# Message is everything remaining
 if [[ "${1:-}" == "-" && $# -eq 1 ]]; then
   message=$(cat)
 else
   message=$*
 fi
 
-from_server=${from_server%/}
-to_server=${to_server%/}
-
-nudge=$(cat <<EOF
-From-Server: $from_server
-From-Session: $from_session
-
-$message
-
-If replying, send a new nudge to the From route. Do not use this HTTP response as the reply channel.
-EOF
-)
-
-payload=$(printf '{"parts":[{"type":"text","text":%s}]}' "$(json_string "$nudge")")
-tmp=${TMPDIR:-/tmp}/oc-nudge-response.$$
-trap 'rm -f "$tmp"' EXIT
-
-http_code=$(
-  curl -sS -o "$tmp" -w '%{http_code}' --max-time "${OC_NUDGE_TIMEOUT:-15}" \
-    -X POST "$to_server/session/$to_session/prompt_async" \
-    -H 'Content-Type: application/json' \
-    -d "$payload"
-)
-
-case "$http_code" in
-  2*)
-    printf 'Nudge sent to %s/session/%s (HTTP %s).\n' "$to_server" "$to_session" "$http_code" >&2
-    ;;
-  *)
-    printf 'oc-nudge: POST failed with HTTP %s\n' "$http_code" >&2
-    if [[ -s "$tmp" ]]; then
-      printf '%s\n' '--- response body ---' >&2
-      sed 's/^/  /' "$tmp" >&2
+# Create new session if --new flag set (only for alias mode, explicit to-session already has one)
+if [[ $new_session -eq 1 ]]; then
+  new_ids=()
+  for i in $(seq 0 $((${#targets[@]} - 1))); do
+    server= session=
+    server=${targets[$i]%%$'\t'*}
+    session=${targets[$i]##*$'\t'}
+    if [[ "$session" == ses_* ]]; then
+      # Existing session in targets file — still create a new one
+      new_id=
+      new_id=$(create_session "$server" "Nudge from $from_alias")
+      printf 'New session on %s: %s\n' "$server" "$new_id" >&2
+      new_ids+=("$new_id")
+      targets[$i]="$server"$'\t'"$new_id"
     fi
-    exit 1
-    ;;
-esac
+  done
+fi
+
+# Send to each recipient
+errors=0
+for target in "${targets[@]}"; do
+  t_server=${target%%$'\t'*}
+  t_session=${target##*$'\t'}
+  send_nudge "$from_server" "$from_session" "$t_server" "$t_session" "$message" || errors=$((errors + 1))
+done
+
+exit $(( errors > 0 ? 1 : 0 ))
