@@ -1,0 +1,17 @@
+﻿{
+  "$schema": "https://opencode.ai/config.json",
+
+  "plugin": ["@playwo/opencode-cursor-oauth@0.4.3"],
+  "provider": {
+    "cursor": {
+      "name": "Cursor"
+    }
+  },
+  "disabled_providers": ["opencode-go", "berget"],
+  "permission": {
+    "ring": "allow",
+    "timer": "allow",
+    "websearch": "allow",
+    "webfetch": "allow"
+  }
+}

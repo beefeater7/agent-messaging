@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ ! -x "$ROOT/ring-bell" ]; then
+  make -C "$ROOT" ring-bell >/dev/null
+fi
+exec "$ROOT/ring-bell" "$@"
