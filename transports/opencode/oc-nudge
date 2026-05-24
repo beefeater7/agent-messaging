@@ -127,6 +127,7 @@ send_nudge() {
 [← $from_host $from_session$model_suffix]
 
 $message
+↩ reply via nudge
 EOF
   )
 
