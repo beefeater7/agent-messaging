@@ -11,11 +11,24 @@ The nudge body includes the sender's server URL and session ID so the receiving 
 
 ## Usage
 
+**Standard (recommended):** omit sender flags. With `oc-snoop` on `PATH`, `oc-nudge` discovers this host's OpenCode server and session automatically.
+
 ```bash
-oc-nudge --from FROM_ALIAS TARGET_ALIAS "message"
+oc-nudge thinkpad "message"
+oc-nudge --model openai/gpt-5.5 thinkpad "use this model on the recipient"
 ```
 
-or without aliases:
+**Explicit recipient** (same machine or no target alias):
+
+```bash
+oc-nudge --to-server http://127.0.0.1:4096 --to-session ses_recipient "message"
+```
+
+**Override sender** when auto-discovery is wrong or unavailable:
+
+```bash
+oc-nudge --from samsung thinkpad "message"
+```
 
 ```bash
 oc-nudge \
@@ -26,7 +39,7 @@ oc-nudge \
   "message"
 ```
 
-By default, `oc-nudge` posts to `/session/:id/prompt_async` and does not wait for the remote assistant response. Replies should be explicit new nudges.
+By default, `oc-nudge` posts to `/session/:id/prompt_async` and does not wait for the remote assistant response. Replies should be explicit new nudges (do not poll `/session/.../message` for the other side's answer).
 
 ## Targets
 

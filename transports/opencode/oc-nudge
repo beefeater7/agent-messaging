@@ -7,10 +7,14 @@ targets_file=${OC_NUDGE_TARGETS:-$script_dir/targets.local.tsv}
 usage() {
   cat <<'EOF'
 Usage:
+  oc-nudge [--new] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
   oc-nudge [--from FROM_ALIAS] [--new] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
   oc-nudge --from-server URL --from-session ID [--new] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
   oc-nudge --from-server URL --from-session ID --to-server URL --to-session ID MESSAGE...
   oc-nudge --list-targets
+
+Sender (standard): omit --from / --from-server / --from-session. oc-nudge uses
+oc-snoop when installed to discover this machine's OpenCode server and session.
 
 Options:
   --new          Create a new session on the target server instead of using the
@@ -30,13 +34,12 @@ Target table format:
   alias  server-url  session-id
 
 Examples:
-  oc-nudge --from samsung thinkpad "please check status"
-  oc-nudge --from samsung hp thinkpad "status check"      # multi-recipient
-  oc-nudge --new thinkpad "wake up"                       # new session on target
-  oc-nudge --model deepseek thinkpad "status"              # force provider
-  oc-nudge --from-server http://samsung.local --from-session ses_abc thinkpad "hello"
-  oc-nudge --from-server http://samsung.local --from-session ses_abc \
-    --to-server http://thinkpad.local --to-session ses_def "hello"
+  oc-nudge thinkpad "please check status"
+  oc-nudge --model openai/gpt-5.5 thinkpad "review this patch"
+  oc-nudge --to-server http://127.0.0.1:4096 --to-session ses_abc "localhost only"
+  oc-nudge --new thinkpad "wake up"
+  oc-nudge --from samsung thinkpad "when snoop unavailable or wrong session"
+  oc-nudge --from-server http://samsung.local --from-session ses_abc thinkpad "explicit route"
 EOF
 }
 
