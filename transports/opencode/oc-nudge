@@ -159,8 +159,11 @@ send_nudge() {
   local from_host=${from_server#*://}
   from_host=${from_host%%:*}
   from_host=${from_host%/}
-  local model_suffix=""
+  local model_suffix="" reply_instruction="Nudge if replying."
   [[ -n "${model:-}" ]] && model_suffix=" · ${model}"
+  if [[ "$from_session" == "Human" ]]; then
+    reply_instruction="If replying, reply conventionally. No nudge reply channel."
+  fi
   nudge=$(cat <<EOF
 $from_session nudging from $from_host$model_suffix:
 ────────────────────────────────
@@ -168,11 +171,13 @@ $from_session nudging from $from_host$model_suffix:
 $message
 
 ────────────────────────────────
-Nudge if replying.
+$reply_instruction
 EOF
   )
 
-  local http_code
+  local http_code to_display
+  to_display=${to_server#http://}
+  to_display=${to_display#https://}
   payload=$(printf '{"parts":[{"type":"text","text":%s}]' "$(json_string "$nudge")")
   if [[ -n "$model" ]]; then
     local provider=${model%/*} model_id=${model#*/}
@@ -196,8 +201,8 @@ EOF
   )
 
   case "$http_code" in
-    2*)
-      printf 'Nudge sent to %s/session/%s (HTTP %s).\n' "$to_server" "$to_session" "$http_code" >&2
+    204)
+      printf 'Nudged %s/session/%s\n' "$to_display" "$to_session" >&2
       return 0
       ;;
     *)
