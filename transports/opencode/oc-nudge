@@ -7,18 +7,23 @@ targets_file=${OC_NUDGE_TARGETS:-$script_dir/targets.local.tsv}
 usage() {
   cat <<'END_USAGE'
 Usage:
-  oc-nudge [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge [-p|--person] [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge [-p|--person] [-n] [--model PROVIDER] TARGET_ALIAS SESSION_ID MESSAGE...
   oc-nudge [--from FROM_ALIAS] [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
   oc-nudge --from-server URL --from-session ID [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
   oc-nudge --from-server URL --from-session ID --to-server URL --to-session ID MESSAGE...
   oc-nudge --list-targets
 
 Sender (standard): omit --from / --from-server / --from-session. oc-nudge uses
-oc-snoop when installed to discover this machine's OpenCode server and session.
+oc-snoop to discover this machine's OpenCode server and oc-whoami to discover
+the current OpenCode tool session.
 
 Options:
+  -p, --person  Terminal/person mode. Sender is labeled "Human" instead of a
+                 session ID.
   -n, --new      Create a new session on the target server instead of using the
                  existing one. Reports the new session ID back to stdout.
+  --help         Show this help.
   --model NAME   Specify the provider to use on the target side (e.g., deepseek).
                  Adds a Model: header to the nudge body and passes providerID
                  in the API request so the recipient agent uses the right model.
@@ -35,6 +40,7 @@ Target table format:
 
 Examples:
   oc-nudge thinkpad "please check status"
+  oc-nudge -p samsung ses_abc "message from terminal"
   oc-nudge --model openai/gpt-5.5 thinkpad "review this patch"
   oc-nudge --to-server http://127.0.0.1:4096 --to-session ses_abc "localhost only"
   oc-nudge -n thinkpad "wake up"
@@ -204,12 +210,18 @@ to_server=
 to_session=
 new_session=0
 model=
+human_mode=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|--help)
       usage
       exit 0
+      ;;
+    -p|--person)
+      human_mode=1
+      from_session=${from_session:-Human}
+      shift
       ;;
     --targets)
       [[ $# -ge 2 ]] || die "--targets requires a file"
@@ -274,14 +286,19 @@ if [[ -n "$from_alias" ]]; then
   from_session=${from_session:-$alias_session}
 fi
 
-# Auto-snoop if needed
-if [[ -z "$from_server" || -z "$from_session" ]] && command -v oc-snoop >/dev/null 2>&1; then
-  from_server=${from_server:-$(oc-snoop --server)}
-  from_session=${from_session:-$(oc-snoop --session)}
+# Auto-discover sender pieces if needed. Session discovery is authoritative:
+# oc-whoami succeeds for OpenCode tool calls and fails for ordinary terminals.
+if [[ -z "$from_server" ]] && command -v oc-snoop >/dev/null 2>&1; then
+  from_server=$(oc-snoop --server)
+fi
+
+if [[ -z "$from_session" && $human_mode -eq 0 ]]; then
+  command -v oc-whoami >/dev/null 2>&1 || die "sender session missing: set --from-session or use -p/--person from a terminal"
+  from_session=$(oc-whoami --match oc-nudge) || die "sender session missing: set --from-session or use -p/--person from a terminal"
 fi
 
 [[ -n "$from_server" ]] || die "sender route missing: set --from, --from-server, or install oc-snoop"
-[[ -n "$from_session" ]] || die "sender route missing: set --from, --from-session, or install oc-snoop"
+[[ -n "$from_session" ]] || die "sender session missing: set --from-session or use -p/--person from a terminal"
 from_server=$(normalize_url "$from_server")
 from_server=${from_server%/}
 
@@ -303,6 +320,10 @@ else
       read -r s r < <(lookup_route "$1")
       targets+=("$(normalize_url "$s")"$'\t'"$r")
       shift
+      if [[ ${1:-} == ses_* ]]; then
+        targets[-1]="$(normalize_url "$s")"$'\t'"$1"
+        shift
+      fi
     else
       break
     fi

@@ -11,11 +11,18 @@ The nudge body includes the sender's server URL and session ID so the receiving 
 
 ## Usage
 
-**Standard (recommended):** omit sender flags. With `oc-snoop` on `PATH`, `oc-nudge` discovers this host's OpenCode server and session automatically.
+**Standard agent use (recommended):** omit sender flags. With `oc-snoop` and `oc-whoami` on `PATH`, `oc-nudge` discovers this host's OpenCode server and the current OpenCode tool session automatically. This requires running as an OpenCode tool call.
 
 ```bash
 oc-nudge thinkpad "message"
 oc-nudge --model openai/gpt-5.5 thinkpad "use this model on the recipient"
+```
+
+**Human terminal use:** pass `-p` or `--person` so the sender is labeled `Human` instead of an OpenCode session ID.
+
+```bash
+oc-nudge -p thinkpad "message from terminal"
+oc-nudge -p thinkpad ses_recipient "message to a specific session"
 ```
 
 **Explicit recipient** (same machine or no target alias):

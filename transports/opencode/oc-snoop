@@ -14,7 +14,7 @@ Snoops the local opencode server route by:
   1. Walking the process tree to find the opencode parent process
   2. Extracting --port and --hostname from its command line
   3. Resolving the local routable IP address
-  4. Querying the current opencode session ID
+  4. Querying the current OpenCode tool session via oc-whoami when requested
 
 Fallbacks (in order):
   - Check all opencode processes on the system
@@ -119,19 +119,13 @@ get_routable_ip() {
 }
 
 get_session_id() {
-  local raw line
+  local raw
 
-  # Prefer oc-whoami if installed (100% reliable via /session/status API)
-  if command -v oc-whoami >/dev/null 2>&1; then
-    raw=$(oc-whoami 2>/dev/null) || true
-    [[ -n $raw ]] && printf '%s\n' "$raw" && return 0
-  fi
-
-  raw=$(opencode session list 2>/dev/null) || die "cannot run 'opencode session list'"
-  # Filter for lines matching ses_* format
-  line=$(printf '%s\n' "$raw" | grep -E '^ses_\S+' | head -1)
-  [[ -n $line ]] || die "no opencode sessions found"
-  printf '%s\n' "$line" | awk '{print $1}'
+  command -v oc-whoami >/dev/null 2>&1 || die "missing required command: oc-whoami"
+  raw=$(oc-whoami --match oc-snoop) || return 1
+  [[ -n $raw ]] || die "oc-whoami returned an empty session ID"
+  [[ "$raw" == ses_* ]] || die "unexpected session ID from oc-whoami: $raw"
+  printf '%s\n' "$raw"
 }
 
 # ── port scanning fallback ────────────────────────────────────────
@@ -183,12 +177,10 @@ snoop_route() {
 
   hostname=${hostname:-0.0.0.0}
   ip=$(get_routable_ip)
-  session=$(get_session_id)
-
   snoop_port=$port
   snoop_hostname=$hostname
   snoop_ip=$ip
-  snoop_session=$session
+  snoop_session=
   snoop_alias=${OC_NUDGE_FROM:-$(hostname)}
 }
 
@@ -203,7 +195,7 @@ case "${1:-}" in
     printf '%s\n' "$server_url"
     ;;
   --session|--id)
-    printf '%s\n' "$snoop_session"
+    get_session_id 2>/dev/null || true
     ;;
   --alias|--name)
     printf '%s\n' "$snoop_alias"
@@ -214,6 +206,7 @@ case "${1:-}" in
     printf 'export OC_NUDGE_FROM=%s\n' "$snoop_alias"
     ;;
   --json)
+    snoop_session=$(get_session_id 2>/dev/null || true)
     printf '{"server":"%s","session":"%s","alias":"%s","ip":"%s","port":"%s","hostname":"%s"}\n' \
       "$server_url" "$snoop_session" "$snoop_alias" "$snoop_ip" "$snoop_port" "$snoop_hostname"
     ;;
@@ -222,6 +215,7 @@ case "${1:-}" in
     exit 0
     ;;
   *)
+    snoop_session=$(get_session_id 2>/dev/null || true)
     printf '%-16s %s\n' 'server:'  "$server_url"
     printf '%-16s %s\n' 'session:' "$snoop_session"
     printf '%-16s %s\n' 'alias:'   "$snoop_alias"
