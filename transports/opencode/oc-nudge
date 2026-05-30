@@ -162,7 +162,7 @@ send_nudge() {
   local model_suffix="" reply_instruction="Nudge if replying."
   [[ -n "${model:-}" ]] && model_suffix=" · ${model}"
   if [[ "$from_session" == "Human" ]]; then
-    reply_instruction="If replying, reply conventionally. No nudge reply channel."
+    reply_instruction="Use chat if replying."
   fi
   nudge=$(cat <<EOF
 $from_session nudging from $from_host$model_suffix:
