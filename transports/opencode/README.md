@@ -25,6 +25,17 @@ oc-nudge -p thinkpad "message from terminal"
 oc-nudge -p thinkpad ses_recipient "message to a specific session"
 ```
 
+For multi-line stdin input, agents should use an envelope-looking heredoc delimiter. `oc-nudge` trims leading empty lines from stdin so the received nudge envelope owns the spacing.
+
+```bash
+oc-nudge -p thinkpad ses_recipient <<\
+────────────────
+
+multi-line message
+
+────────────────
+```
+
 **Explicit recipient** (same machine or no target alias):
 
 ```bash

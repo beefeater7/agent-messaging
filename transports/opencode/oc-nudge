@@ -77,6 +77,18 @@ json_string() {
   printf '"%s"' "$(json_escape "$1")"
 }
 
+read_stdin_message() {
+  local value
+  value=$(cat)
+  # The nudge envelope owns vertical spacing around stdin/heredoc messages.
+  # Command substitution already trims trailing newlines; trim leading empty
+  # lines as well so visually wrapped input does not add extra top padding.
+  while [[ $value == $'\n'* ]]; do
+    value=${value#$'\n'}
+  done
+  printf '%s' "$value"
+}
+
 lookup_route() {
   local alias=$1 name server session rest
 
@@ -270,6 +282,9 @@ while [[ $# -gt 0 ]]; do
       shift
       break
       ;;
+    -)
+      break
+      ;;
     -*)
       die "unknown option: $1"
       ;;
@@ -341,10 +356,10 @@ fi
 
 # Message is everything remaining
 if [[ "${1:-}" == "-" && $# -eq 1 ]]; then
-  message=$(cat)
+  message=$(read_stdin_message)
 elif [[ $# -eq 0 ]]; then
   [[ ! -t 0 ]] || die "expected MESSAGE... or stdin"
-  message=$(cat)
+  message=$(read_stdin_message)
 else
   message=$*
 fi
