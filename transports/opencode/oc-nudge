@@ -18,6 +18,10 @@ Sender (standard): omit --from / --from-server / --from-session. oc-nudge uses
 oc-snoop to discover this machine's OpenCode server and oc-whoami to discover
 the current OpenCode tool session.
 
+Recipients: prefer TARGET_ALIAS. Use TARGET_ALIAS SESSION_ID when sending to a
+known session on a known target host. Use --to-server/--to-session only for
+direct routes that are not in the target table.
+
 Options:
   -p, --person  Terminal/person mode. Sender is labeled "Human" instead of a
                  session ID.
@@ -40,14 +44,23 @@ Target table format:
 
 Examples:
   oc-nudge thinkpad "please check status"
+  oc-nudge samsung ses_abc "message to a specific session on samsung"
   oc-nudge -p samsung ses_abc "message from terminal"
   oc-nudge --model openai/gpt-5.5 thinkpad "review this patch"
-  oc-nudge --to-server http://127.0.0.1:4096 --to-session ses_abc "localhost only"
   oc-nudge -n thinkpad "wake up"
-  oc-nudge -n thinkpad <<\
+
+Multi-line example:
+
+oc-nudge -n thinkpad <<\
 ────────────────
+
 multiline message
+
 ────────────────
+
+Direct route example, for targets not in the target table:
+
+  oc-nudge --to-server http://127.0.0.1:4096 --to-session ses_abc "no alias route"
   oc-nudge --from samsung thinkpad "when snoop unavailable or wrong session"
   oc-nudge --from-server http://samsung.local --from-session ses_abc thinkpad "explicit route"
 END_USAGE

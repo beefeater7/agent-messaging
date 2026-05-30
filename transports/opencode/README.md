@@ -25,6 +25,8 @@ oc-nudge -p thinkpad "message from terminal"
 oc-nudge -p thinkpad ses_recipient "message to a specific session"
 ```
 
+Prefer target aliases for normal sends. Use `TARGET_ALIAS SESSION_ID` when you know the recipient session on a known target host. Use `--to-server/--to-session` only for direct routes that are not in the target table.
+
 For multi-line stdin input, agents should use an envelope-looking heredoc delimiter. `oc-nudge` trims leading empty lines from stdin so the received nudge envelope owns the spacing.
 
 This form uses an unquoted heredoc delimiter, so shell expansion still applies inside the body. Quote or escape dollar signs, backticks, and command substitutions when they should be sent literally.
