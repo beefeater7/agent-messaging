@@ -5,11 +5,11 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 targets_file=${OC_NUDGE_TARGETS:-$script_dir/targets.local.tsv}
 
 usage() {
-  cat <<'EOF'
+  cat <<'END_USAGE'
 Usage:
-  oc-nudge [--new] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
-  oc-nudge [--from FROM_ALIAS] [--new] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
-  oc-nudge --from-server URL --from-session ID [--new] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge [--from FROM_ALIAS] [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge --from-server URL --from-session ID [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
   oc-nudge --from-server URL --from-session ID --to-server URL --to-session ID MESSAGE...
   oc-nudge --list-targets
 
@@ -17,7 +17,7 @@ Sender (standard): omit --from / --from-server / --from-session. oc-nudge uses
 oc-snoop when installed to discover this machine's OpenCode server and session.
 
 Options:
-  --new          Create a new session on the target server instead of using the
+  -n, --new      Create a new session on the target server instead of using the
                  existing one. Reports the new session ID back to stdout.
   --model NAME   Specify the provider to use on the target side (e.g., deepseek).
                  Adds a Model: header to the nudge body and passes providerID
@@ -37,10 +37,13 @@ Examples:
   oc-nudge thinkpad "please check status"
   oc-nudge --model openai/gpt-5.5 thinkpad "review this patch"
   oc-nudge --to-server http://127.0.0.1:4096 --to-session ses_abc "localhost only"
-  oc-nudge --new thinkpad "wake up"
+  oc-nudge -n thinkpad "wake up"
+  oc-nudge -n thinkpad <<'EOF'
+multiline message
+EOF
   oc-nudge --from samsung thinkpad "when snoop unavailable or wrong session"
   oc-nudge --from-server http://samsung.local --from-session ses_abc thinkpad "explicit route"
-EOF
+END_USAGE
 }
 
 die() {
@@ -127,10 +130,13 @@ send_nudge() {
   local model_suffix=""
   [[ -n "${model:-}" ]] && model_suffix=" · ${model}"
   nudge=$(cat <<EOF
-[← $from_host $from_session$model_suffix]
+$from_session nudging from $from_host$model_suffix:
+────────────────────────────────
 
 $message
-↩ nudge if replying
+
+────────────────────────────────
+Nudge if replying.
 EOF
   )
 
@@ -235,7 +241,7 @@ while [[ $# -gt 0 ]]; do
       to_session=$2
       shift 2
       ;;
-    --new)
+    -n|--new)
       new_session=1
       shift
       ;;
@@ -286,11 +292,10 @@ if [[ -n "$to_server" && -n "$to_session" ]]; then
   # Explicit --to-server / --to-session: single recipient, remainder is message
   to_server=$(normalize_url "$to_server")
   to_server=${to_server%/}
-  [[ $# -ge 1 ]] || die "expected MESSAGE..."
   targets+=("$to_server"$'\t'"$to_session")
 else
   # Alias-based: collect all known aliases before the message
-  [[ $# -ge 2 ]] || die "expected TARGET_ALIAS [TARGET_ALIAS...] MESSAGE..."
+  [[ $# -ge 1 ]] || die "expected TARGET_ALIAS [TARGET_ALIAS...] MESSAGE..."
 
   while [[ $# -gt 1 ]]; do
     if is_known_alias "$1"; then
@@ -303,12 +308,21 @@ else
     fi
   done
 
+  if [[ $# -eq 1 && ! -t 0 ]] && is_known_alias "$1"; then
+    s= r=
+    read -r s r < <(lookup_route "$1")
+    targets+=("$(normalize_url "$s")"$'\t'"$r")
+    shift
+  fi
+
   [[ ${#targets[@]} -gt 0 ]] || die "no valid target aliases found"
-  [[ $# -ge 1 ]] || die "expected MESSAGE..."
 fi
 
 # Message is everything remaining
 if [[ "${1:-}" == "-" && $# -eq 1 ]]; then
+  message=$(cat)
+elif [[ $# -eq 0 ]]; then
+  [[ ! -t 0 ]] || die "expected MESSAGE... or stdin"
   message=$(cat)
 else
   message=$*
@@ -325,7 +339,6 @@ if [[ $new_session -eq 1 ]]; then
       # Existing session in targets file — still create a new one
       new_id=
       new_id=$(create_session "$server" "Nudge from $from_alias")
-      printf 'New session on %s: %s\n' "$server" "$new_id" >&2
       new_ids+=("$new_id")
       targets[$i]="$server"$'\t'"$new_id"
     fi
