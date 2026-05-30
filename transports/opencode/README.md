@@ -27,6 +27,8 @@ oc-nudge -p thinkpad ses_recipient "message to a specific session"
 
 For multi-line stdin input, agents should use an envelope-looking heredoc delimiter. `oc-nudge` trims leading empty lines from stdin so the received nudge envelope owns the spacing.
 
+This form uses an unquoted heredoc delimiter, so shell expansion still applies inside the body. Quote or escape dollar signs, backticks, and command substitutions when they should be sent literally.
+
 ```bash
 oc-nudge -p thinkpad ses_recipient <<\
 ────────────────
