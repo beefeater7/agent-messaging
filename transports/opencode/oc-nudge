@@ -6,43 +6,32 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 usage() {
   cat <<'END_USAGE'
 Usage:
-  oc-nudge [-p|--person] [--model NAME] SESSION_ID MESSAGE...
-  oc-nudge [-p|--person] -n HOST [--model NAME] MESSAGE...
-  oc-nudge [-p|--person] [--model NAME] --to-session ID [--to-server URL] MESSAGE...
+  oc-nudge SESSION_ID MESSAGE...         Send to an existing session
+  oc-nudge -n HOST MESSAGE...            Create a new session on HOST and send
+  oc-nudge --list HOST                   List all sessions on HOST
+  oc-nudge --to-session ID [--to-server URL] MESSAGE...
   oc-nudge --from-server URL --from-session ID --to-server URL --to-session ID MESSAGE...
-  oc-nudge --list HOST
-  oc-nudge --help
 
-Sender (standard): omit --from / --from-server / --from-session. oc-nudge uses
-oc-snoop to discover this machine's OpenCode server and oc-whoami to discover
-the current OpenCode tool session.
-
-The first positional argument starting with "ses_" is the target session ID.
-oc-nudge resolves its host via oc-find unless --to-server is also specified.
+oc-nudge finds the sender session and server automatically (via oc-snoop and
+oc-whoami). The target session ID is resolved to a host via oc-find; no manual
+routing needed unless you use --to-server.
 
 Options:
-  -p, --person    Terminal/person mode. Sender is labeled "Human".
-  -n, --new HOST   Create a session on HOST and send the message.
-  --help           Show this help.
-  --model NAME     Specify the provider/model (e.g., deepseek/deepseek-v4-flash).
-  --to-server URL  Target server URL (optional; resolved via oc-find if omitted).
-  --to-session ID  Target session ID.
-  --list HOST      List sessions on HOST.
-
-Environment:
-  OC_NUDGE_FROM           Default sender alias
-  OC_NUDGE_FROM_SERVER    Default sender OpenCode server URL
-  OC_NUDGE_FROM_SESSION   Default sender OpenCode session ID
-  OC_NUDGE_TIMEOUT        Curl timeout in seconds (default: 15)
+  -n, --new HOST    Create a new session on HOST (e.g., thinkpad) and send to it.
+  --list HOST       List all sessions on HOST.
+  --model NAME      Provider/model for the recipient (e.g., deepseek/deepseek-v4-flash).
+  -p, --person      Terminal mode: sender is labeled "Human" instead of a session ID.
+  --to-session ID   Target session ID (resolved via oc-find if --to-server omitted).
+  --to-server URL   Target server URL (default: http://HOST.local:4096).
+  --help            Show this message.
 
 Examples:
   oc-nudge ses_177...QI "please check status"
   oc-nudge -n thinkpad "wake up"
-  oc-nudge --to-session ses_abc "msg"
-  oc-nudge --to-server http://thinkpad.local:4096 --to-session ses_abc "explicit"
   oc-nudge --list thinkpad
+  oc-nudge --to-server http://10.0.0.5:4096 --to-session ses_abc "manual route"
 
-Multi-line example:
+Multi-line:
 
 oc-nudge ses_177...QI <<\
 ────────────────
