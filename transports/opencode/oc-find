@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  oc-find <session-id>         Resolve session to hostname
+  oc-find --hosts              List known hosts with online status
+  oc-find --scan               Scan LAN for active opencode hosts
+  oc-find --help               Show this message
+
+Finds which host a session ID belongs to by querying known hosts'
+GET /session endpoints. Hosts are read from ~/.config/opencode/hosts
+(one hostname per line, # for comments).
+
+Examples:
+  oc-find ses_1772f63b4ffeIP7VTiEHaHZdQI
+  oc-find --hosts
+  oc-find --scan
+EOF
+}
+
+HOSTS_FILE="$HOME/.config/opencode/hosts"
+SESSION_ENDPOINT="/session"
+DEFAULT_PORT=4096
+SCAN_OCTETS_START=4
+SCAN_OCTETS_END=63
+SCAN_PARALLEL=12
+
+die() { printf 'oc-find: %s\n' "$*" >&2; exit 1; }
+
+# ── host sources ───────────────────────────────────────────────────
+
+collect_hosts() {
+  local hosts=()
+  if [[ -r "$HOSTS_FILE" ]]; then
+    while IFS= read -r line; do
+      line="${line%%#*}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [[ -n $line ]] || continue
+      hosts+=("$line")
+    done < "$HOSTS_FILE"
+  fi
+  printf '%s\n' "${hosts[@]}"
+}
+
+# ── session lookup ─────────────────────────────────────────────────
+
+find_session() {
+  local session_id=$1 host=$2
+  local url="http://${host}.local:${DEFAULT_PORT}${SESSION_ENDPOINT}"
+  local response
+  response=$(curl -s --connect-timeout 3 --max-time 5 "$url" 2>/dev/null) || return 1
+  printf '%s' "$response" | grep -qF "\"id\":\"${session_id}\"" 2>/dev/null
+}
+
+# ── host liveness ──────────────────────────────────────────────────
+
+check_host() {
+  local host=$1
+  if ! getent hosts "${host}.local" >/dev/null 2>&1; then
+    printf '—'
+    return 1
+  fi
+  if timeout 1 bash -c "exec 3<>/dev/tcp/${host}.local/${DEFAULT_PORT}" 2>/dev/null; then
+    printf '●'
+    return 0
+  fi
+  printf '○'
+  return 1
+}
+
+# ── hosts list with status ─────────────────────────────────────────
+
+show_hosts() {
+  local hosts host status
+  hosts=$(collect_hosts)
+  [[ -n $hosts ]] || die "no hosts configured (create $HOSTS_FILE)"
+  while IFS= read -r host; do
+    [[ -n $host ]] || continue
+    status=$(check_host "$host") || true
+    printf '%s  %s\n' "$status" "$host"
+  done <<< "$hosts"
+}
+
+# ── LAN scan ───────────────────────────────────────────────────────
+
+get_subnet() {
+  local iface ip
+  iface=$(ip -4 route show default 2>/dev/null | awk '{print $5}' | head -1)
+  ip=$(ip -4 -o addr show "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+  [[ -n $ip ]] || return 1
+  printf '%s' "${ip%.*}"
+}
+
+resolve_hostname() {
+  local ip=$1
+  local name
+  if command -v avahi-resolve-address >/dev/null 2>&1; then
+    name=$(timeout 2 avahi-resolve-address -4 "$ip" 2>/dev/null | awk '{print $2}' | sed 's/\.local\.$//' | sed 's/\.local$//') || true
+    [[ -n $name ]] && { printf '%s' "$name"; return 0; }
+  fi
+  printf '%s' "$ip"
+}
+
+check_ip() {
+  local ip=$1
+  timeout 0.1 bash -c "exec 3<>/dev/tcp/${ip}/${DEFAULT_PORT}" 2>/dev/null || return 1
+  printf '%s\n' "$(resolve_hostname "$ip")"
+}
+export -f check_ip resolve_hostname # for xargs
+export DEFAULT_PORT
+
+scan_lan() {
+  local subnet
+  subnet=$(get_subnet) || die "could not determine local subnet"
+  printf 'scanning %s.%s-%s...\n' "$subnet" "$SCAN_OCTETS_START" "$SCAN_OCTETS_END" >&2
+  seq "$SCAN_OCTETS_START" "$SCAN_OCTETS_END" | xargs -P "$SCAN_PARALLEL" -I{} bash -c "check_ip ${subnet}.{}" 2>/dev/null | sort -u
+}
+
+# ── main ───────────────────────────────────────────────────────────
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  --hosts)   show_hosts; exit 0 ;;
+  --scan)    scan_lan; exit 0 ;;
+esac
+
+session_id="${1:-}"
+[[ -n $session_id ]] || die "session ID required (use --help)"
+[[ "$session_id" == ses_* ]] || die "invalid session ID: $session_id"
+
+hosts=$(collect_hosts)
+[[ -n $hosts ]] || die "no hosts configured (create $HOSTS_FILE)"
+
+while IFS= read -r host; do
+  [[ -n $host ]] || continue
+  if find_session "$session_id" "$host"; then
+    printf '%s\n' "$host"
+    exit 0
+  fi
+done <<< "$hosts"
+
+printf 'session %s not found on any known host\n' "$session_id" >&2
+exit 1
