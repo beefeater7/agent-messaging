@@ -2,67 +2,54 @@
 set -euo pipefail
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-targets_file=${OC_NUDGE_TARGETS:-$script_dir/targets.local.tsv}
 
 usage() {
   cat <<'END_USAGE'
 Usage:
-  oc-nudge [-p|--person] [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
-  oc-nudge [-p|--person] [-n] [--model PROVIDER] TARGET_ALIAS SESSION_ID MESSAGE...
-  oc-nudge [--from FROM_ALIAS] [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
-  oc-nudge --from-server URL --from-session ID [-n] [--model PROVIDER] TARGET_ALIAS [TARGET_ALIAS...] MESSAGE...
+  oc-nudge [-p|--person] [--model NAME] SESSION_ID MESSAGE...
+  oc-nudge [-p|--person] -n HOST [--model NAME] MESSAGE...
+  oc-nudge [-p|--person] [--model NAME] --to-session ID [--to-server URL] MESSAGE...
   oc-nudge --from-server URL --from-session ID --to-server URL --to-session ID MESSAGE...
-  oc-nudge --list-targets
+  oc-nudge --list HOST
+  oc-nudge --help
 
 Sender (standard): omit --from / --from-server / --from-session. oc-nudge uses
 oc-snoop to discover this machine's OpenCode server and oc-whoami to discover
 the current OpenCode tool session.
 
-Recipients: prefer TARGET_ALIAS. Use TARGET_ALIAS SESSION_ID when sending to a
-known session on a known target host. Use --to-server/--to-session only for
-direct routes that are not in the target table.
+The first positional argument starting with "ses_" is the target session ID.
+oc-nudge resolves its host via oc-find unless --to-server is also specified.
 
 Options:
-  -p, --person  Terminal/person mode. Sender is labeled "Human" instead of a
-                 session ID.
-  -n, --new      Create a new session on the target server instead of using the
-                 existing one. Reports the new session ID back to stdout.
-  --help         Show this help.
-  --model NAME   Specify the provider to use on the target side (e.g., deepseek).
-                 Adds a Model: header to the nudge body and passes providerID
-                 in the API request so the recipient agent uses the right model.
+  -p, --person    Terminal/person mode. Sender is labeled "Human".
+  -n, --new HOST   Create a session on HOST and send the message.
+  --help           Show this help.
+  --model NAME     Specify the provider/model (e.g., deepseek/deepseek-v4-flash).
+  --to-server URL  Target server URL (optional; resolved via oc-find if omitted).
+  --to-session ID  Target session ID.
+  --list HOST      List sessions on HOST.
 
 Environment:
-  OC_NUDGE_TARGETS       Target table path (default: targets.local.tsv next to this script)
-  OC_NUDGE_FROM          Default sender alias
-  OC_NUDGE_FROM_SERVER   Default sender OpenCode server URL
-  OC_NUDGE_FROM_SESSION  Default sender OpenCode session ID
-  OC_NUDGE_TIMEOUT       Curl timeout in seconds (default: 15)
-
-Target table format:
-  alias  server-url  session-id
+  OC_NUDGE_FROM           Default sender alias
+  OC_NUDGE_FROM_SERVER    Default sender OpenCode server URL
+  OC_NUDGE_FROM_SESSION   Default sender OpenCode session ID
+  OC_NUDGE_TIMEOUT        Curl timeout in seconds (default: 15)
 
 Examples:
-  oc-nudge thinkpad "please check status"
-  oc-nudge samsung ses_abc "message to a specific session on samsung"
-  oc-nudge -p samsung ses_abc "message from terminal"
-  oc-nudge --model openai/gpt-5.5 thinkpad "review this patch"
+  oc-nudge ses_177...QI "please check status"
   oc-nudge -n thinkpad "wake up"
+  oc-nudge --to-session ses_abc "msg"
+  oc-nudge --to-server http://thinkpad.local:4096 --to-session ses_abc "explicit"
+  oc-nudge --list thinkpad
 
 Multi-line example:
 
-oc-nudge -n thinkpad <<\
+oc-nudge ses_177...QI <<\
 ────────────────
 
 multiline message
 
 ────────────────
-
-Direct route example, for targets not in the target table:
-
-  oc-nudge --to-server http://127.0.0.1:4096 --to-session ses_abc "no alias route"
-  oc-nudge --from samsung thinkpad "when snoop unavailable or wrong session"
-  oc-nudge --from-server http://samsung.local --from-session ses_abc thinkpad "explicit route"
 END_USAGE
 }
 
@@ -78,7 +65,7 @@ need_cmd() {
 json_escape() {
   local value=$1
   value=${value//\\/\\\\}
-  value=${value//"/\\"}
+  value=${value//\"/\\\"}
   value=${value//$'\b'/\\b}
   value=${value//$'\f'/\\f}
   value=${value//$'\n'/\\n}
@@ -94,53 +81,23 @@ json_string() {
 read_stdin_message() {
   local value
   value=$(cat)
-  # The nudge envelope owns vertical spacing around stdin/heredoc messages.
-  # Command substitution already trims trailing newlines; trim leading empty
-  # lines as well so visually wrapped input does not add extra top padding.
   while [[ $value == $'\n'* ]]; do
     value=${value#$'\n'}
   done
   printf '%s' "$value"
 }
 
-lookup_route() {
-  local alias=$1 name server session rest
-
-  [[ -f "$targets_file" ]] || die "target table not found: $targets_file"
-
-  while read -r name server session rest || [[ -n "${name:-}" ]]; do
-    [[ -z "${name:-}" ]] && continue
-    [[ "$name" == \#* ]] && continue
-    if [[ "$name" == "$alias" ]]; then
-      [[ -n "${server:-}" && -n "${session:-}" ]] || die "target '$alias' is missing server or session"
-      printf '%s\t%s\n' "$server" "$session"
-      return
-    fi
-  done <"$targets_file"
-
-  die "unknown target alias '$alias' in $targets_file"
+resolve_host() {
+  local session_id=$1
+  local host
+  host=$("$script_dir/oc-find" "$session_id" 2>/dev/null) || true
+  [[ -n $host ]] || die "could not resolve session $session_id to host (try --to-server for manual routing)"
+  printf '%s' "$host"
 }
 
-is_known_alias() {
-  local alias=$1 name
-  [[ -f "$targets_file" ]] || return 1
-  while read -r name _ __ || [[ -n "${name:-}" ]]; do
-    [[ -z "${name:-}" || "$name" == \#* ]] && continue
-    [[ "$name" == "$alias" ]] && return 0
-  done <"$targets_file"
-  return 1
-}
-
-list_targets() {
-  local name server session rest
-
-  [[ -f "$targets_file" ]] || die "target table not found: $targets_file"
-
-  while read -r name server session rest || [[ -n "${name:-}" ]]; do
-    [[ -z "${name:-}" ]] && continue
-    [[ "$name" == \#* ]] && continue
-    printf '%-20s %s %s\n' "$name" "$server" "$session"
-  done <"$targets_file"
+derive_url() {
+  local host=$1
+  printf 'http://%s.local:4096' "$host"
 }
 
 normalize_url() {
@@ -178,11 +135,10 @@ EOF
   local http_code to_display
   to_display=${to_server#http://}
   to_display=${to_display#https://}
-  payload=$(printf '{"parts":[{"type":"text","text":%s}]' "$(json_string "$nudge")")
+  local payload
   if [[ -n "$model" ]]; then
     local provider=${model%/*} model_id=${model#*/}
     if [[ "$provider" == "$model" ]]; then
-      # Only provider given; let server pick default model
       payload=$(printf '{"model":{"providerID":"%s"},"parts":[{"type":"text","text":%s}]}' "$provider" "$(json_string "$nudge")")
     else
       payload=$(printf '{"model":{"providerID":"%s","modelID":"%s"},"parts":[{"type":"text","text":%s}]}' "$provider" "$model_id" "$(json_string "$nudge")")
@@ -232,16 +188,23 @@ create_session() {
   printf '%s\n' "$session"
 }
 
+list_sessions() {
+  local host=$1
+  local url
+  url=$(derive_url "$host")
+  curl -s --max-time "${OC_NUDGE_TIMEOUT:-15}" "$url/session" 2>/dev/null || die "could not reach $url"
+}
+
 need_cmd curl
 
-from_alias=${OC_NUDGE_FROM:-}
 from_server=${OC_NUDGE_FROM_SERVER:-}
 from_session=${OC_NUDGE_FROM_SESSION:-}
 to_server=
 to_session=
-new_session=0
+new_host=
 model=
 human_mode=0
+list_host=
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -253,16 +216,6 @@ while [[ $# -gt 0 ]]; do
       human_mode=1
       from_session=${from_session:-Human}
       shift
-      ;;
-    --targets)
-      [[ $# -ge 2 ]] || die "--targets requires a file"
-      targets_file=$2
-      shift 2
-      ;;
-    --from)
-      [[ $# -ge 2 ]] || die "--from requires an alias"
-      from_alias=$2
-      shift 2
       ;;
     --from-server)
       [[ $# -ge 2 ]] || die "--from-server requires a URL"
@@ -285,17 +238,25 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -n|--new)
-      new_session=1
-      shift
+      [[ $# -ge 2 ]] || die "-n requires a hostname"
+      new_host=$2
+      shift 2
       ;;
     --model)
-      [[ $# -ge 2 ]] || die "--model requires a provider name"
+      [[ $# -ge 2 ]] || die "--model requires a provider/model name"
       model=$2
       shift 2
       ;;
+    --list)
+      [[ $# -ge 2 ]] || die "--list requires a hostname"
+      list_host=$2
+      shift 2
+      ;;
     --list-targets)
-      list_targets
-      exit 0
+      die "--list-targets has been removed; use --list <host> to list sessions on a host"
+      ;;
+    --targets)
+      die "--targets has been removed; use --list <host> or rely on oc-find for host resolution"
       ;;
     --)
       shift
@@ -313,15 +274,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Resolve from route
-if [[ -n "$from_alias" ]]; then
-  read -r alias_server alias_session < <(lookup_route "$from_alias")
-  from_server=${from_server:-$alias_server}
-  from_session=${from_session:-$alias_session}
+# ── --list mode ─────────────────────────────────────────────────────
+
+if [[ -n $list_host ]]; then
+  list_sessions "$list_host"
+  exit 0
 fi
 
-# Auto-discover sender pieces if needed. Session discovery is authoritative:
-# oc-whoami succeeds for OpenCode tool calls and fails for ordinary terminals.
+# ── discover sender ─────────────────────────────────────────────────
+
 if [[ -z "$from_server" ]] && command -v oc-snoop >/dev/null 2>&1; then
   from_server=$(oc-snoop --server)
 fi
@@ -331,49 +292,45 @@ if [[ -z "$from_session" && $human_mode -eq 0 ]]; then
   from_session=$(oc-whoami --match oc-nudge) || die "sender session missing: set --from-session or use -p/--person from a terminal"
 fi
 
-[[ -n "$from_server" ]] || die "sender route missing: set --from, --from-server, or install oc-snoop"
+[[ -n "$from_server" ]] || die "sender route missing: set --from-server or install oc-snoop"
 [[ -n "$from_session" ]] || die "sender session missing: set --from-session or use -p/--person from a terminal"
 from_server=$(normalize_url "$from_server")
 from_server=${from_server%/}
 
-# Parse recipients and message
-targets=()
+# ── resolve target ──────────────────────────────────────────────────
 
-if [[ -n "$to_server" && -n "$to_session" ]]; then
-  # Explicit --to-server / --to-session: single recipient, remainder is message
+if [[ -n $new_host ]]; then
+  # -n HOST: create new session
+  to_server=${to_server:-$(derive_url "$new_host")}
   to_server=$(normalize_url "$to_server")
   to_server=${to_server%/}
-  targets+=("$to_server"$'\t'"$to_session")
-else
-  # Alias-based: collect all known aliases before the message
-  [[ $# -ge 1 ]] || die "expected TARGET_ALIAS [TARGET_ALIAS...] MESSAGE..."
-
-  while [[ $# -gt 1 ]]; do
-    if is_known_alias "$1"; then
-      s= r=
-      read -r s r < <(lookup_route "$1")
-      targets+=("$(normalize_url "$s")"$'\t'"$r")
-      shift
-      if [[ ${1:-} == ses_* ]]; then
-        targets[-1]="$(normalize_url "$s")"$'\t'"$1"
-        shift
-      fi
-    else
+  to_session=$(create_session "$to_server" "Nudge from $from_session")
+elif [[ -z $to_session ]]; then
+  # No --to-session or -n given: look for a session ID in positionals
+  for arg in "$@"; do
+    if [[ "$arg" == ses_* ]]; then
+      to_session=$arg
       break
     fi
   done
-
-  if [[ $# -eq 1 && ! -t 0 ]] && is_known_alias "$1"; then
-    s= r=
-    read -r s r < <(lookup_route "$1")
-    targets+=("$(normalize_url "$s")"$'\t'"$r")
-    shift
-  fi
-
-  [[ ${#targets[@]} -gt 0 ]] || die "no valid target aliases found"
+  [[ -n ${to_session:-} ]] || die "no session ID found in arguments (use ses_... or --to-session)"
 fi
 
-# Message is everything remaining
+# If to_server not explicitly set, resolve via to_session (now guaranteed non-empty)
+if [[ -z $to_server ]]; then
+  host=$(resolve_host "$to_session")
+  to_server=$(derive_url "$host")
+fi
+to_server=$(normalize_url "$to_server")
+to_server=${to_server%/}
+
+# ── message ─────────────────────────────────────────────────────────
+
+# Eat the session ID from positionals if we parsed it from there
+if [[ -n ${to_session:-} ]] && [[ "${1:-}" == "$to_session" ]]; then
+  shift
+fi
+
 if [[ "${1:-}" == "-" && $# -eq 1 ]]; then
   message=$(read_stdin_message)
 elif [[ $# -eq 0 ]]; then
@@ -383,29 +340,6 @@ else
   message=$*
 fi
 
-# Create new session if --new flag set (only for alias mode, explicit to-session already has one)
-if [[ $new_session -eq 1 ]]; then
-  new_ids=()
-  for i in $(seq 0 $((${#targets[@]} - 1))); do
-    server= session=
-    server=${targets[$i]%%$'\t'*}
-    session=${targets[$i]##*$'\t'}
-    if [[ "$session" == ses_* ]]; then
-      # Existing session in targets file — still create a new one
-      new_id=
-      new_id=$(create_session "$server" "Nudge from $from_alias")
-      new_ids+=("$new_id")
-      targets[$i]="$server"$'\t'"$new_id"
-    fi
-  done
-fi
+# ── send ─────────────────────────────────────────────────────────────
 
-# Send to each recipient
-errors=0
-for target in "${targets[@]}"; do
-  t_server=${target%%$'\t'*}
-  t_session=${target##*$'\t'}
-  send_nudge "$from_server" "$from_session" "$t_server" "$t_session" "$message" "$model" || errors=$((errors + 1))
-done
-
-exit $(( errors > 0 ? 1 : 0 ))
+send_nudge "$from_server" "$from_session" "$to_server" "$to_session" "$message" "$model"
