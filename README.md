@@ -1,38 +1,58 @@
-# Agent Messaging
+# agent-messaging
 
-This directory is the initial persisted workspace for cross-machine agent interaction experiments.
+Cross-machine agent correspondence tools for [OpenCode](https://opencode.ai).
 
-## Goals
+Send async messages between OpenCode sessions over HTTP. Discover machines
+on the LAN without manual host configuration. Fall back to Bluetooth when
+the network is down.
 
-- Keep a stable human-facing interface for sending short agent messages between machines.
-- Prefer transports that use software already present on the host.
-- Treat each transport as an implementation detail behind a simple message-send abstraction.
-- Preserve useful experiments in `/persist` instead of impermanent working directories like `~/Downloads`.
-- Investigate LAN OpenCode API messaging as the next promising path when machines can reach each other over the network.
-- Keep Bluetooth object push as a nearby/offline fallback transport.
+## Install
 
-## Current Transports
-
-- `transports/bluetooth/bt-msg`: sends a text message as a small file over Bluetooth.
-- `transports/opencode/oc-nudge`: sends an async nudge into a pinned OpenCode session over HTTP. **Standard use:** `oc-nudge TARGET "message"` with no `--from*` flags; sender route comes from `oc-snoop`.
-- `transports/opencode/oc-snoop`: auto-discovers local OpenCode server URL and session ID (process tree / listening ports). Used automatically by `oc-nudge` when sender flags are omitted.
-- `whoami/oc-whoami`: 100% DB-based session ID discovery by matching its own "running" part in the SQLite database.
-
-## Hostname Policy
-
-Lazy brand-name policy: change hostname to machine brand when convenient.
-
-```
-nixos      →  samsung  (Samsung laptop)
-erik-...   →  thinkpad (Lenovo ThinkPad)
+```bash
+git clone https://github.com/beefeater7/agent-messaging.git
+cd agent-messaging
+./install.sh      # symlinks tools to ~/.local/bin
 ```
 
-Use `.local` hostnames everywhere — never hardcode LAN IPs. Avahi/mDNS handles resolution automatically when subnets change.
+Requires: `bash`, `curl`, and two machines running OpenCode servers on the
+same LAN with Avahi/mDNS enabled.
 
-## Open Questions
+## Quickstart
 
-- How should machine aliases map to OpenCode base URLs and session IDs?
-- Should session pinning live in a checked-in example config, a private local config, or both?
-- What should an agent do when a target OpenCode session is busy?
-- Should Bluetooth and LAN messages share one command eventually, or stay as separate tools?
-- Should this workspace remain one project, or split into smaller subprojects as the experiments mature?
+```bash
+# From one machine, nudge a session on another:
+oc-nudge ses_abc123 "hello"
+
+# The target session ID resolves automatically via LAN scan.
+# No manual host configuration needed.
+```
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| `oc-nudge` | Send async messages between OpenCode sessions |
+| `oc-find` | Resolve session ID to hostname (LAN scan, auto-cached) |
+| `oc-snoop` | Discover local OpenCode server URL (process tree) |
+| `oc-whoami` | Discover local session ID (SQLite database) |
+| `oc-revive` | Restart local OpenCode server gracefully |
+| `bt-msg` | Send text over Bluetooth (offline fallback) |
+
+## How it works
+
+`oc-nudge` POSTs a text message to the target session's `/prompt_async`
+endpoint over HTTP. The sender's identity (server + session) is included
+in the message body so the recipient can reply.
+
+`oc-find` resolves session IDs to `.local` hostnames. On first use it
+scans the LAN and caches results to a local `hosts` file. Subsequent
+lookups hit the cache — no rescan.
+
+## Multi-machine setup
+
+1. Run OpenCode with `--hostname 0.0.0.0 --port 4096` on each machine
+2. Enable Avahi/mDNS so `.local` hostnames resolve
+3. Clone this repo on each machine, run `install.sh`
+4. That's it — `oc-nudge ses_target "msg"` works immediately
+
+No configuration files, no static IPs, no port forwarding.
