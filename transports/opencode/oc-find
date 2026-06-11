@@ -30,6 +30,7 @@ DEFAULT_PORT=4096
 SCAN_OCTETS_START=4
 SCAN_OCTETS_END=63
 SCAN_PARALLEL=12
+SCAN_TIMEOUT="${OC_FIND_SCAN_TIMEOUT:-0.5}"
 
 die() { printf 'oc-find: %s\n' "$*" >&2; exit 1; }
 
@@ -122,11 +123,11 @@ resolve_hostname() {
 
 check_ip() {
   local ip=$1
-  timeout 0.1 bash -c "exec 3<>/dev/tcp/${ip}/${DEFAULT_PORT}" 2>/dev/null || return 1
+  timeout "$SCAN_TIMEOUT" bash -c "exec 3<>/dev/tcp/${ip}/${DEFAULT_PORT}" 2>/dev/null || return 1
   printf '%s\n' "$(resolve_hostname "$ip")"
 }
 export -f check_ip resolve_hostname # for xargs
-export DEFAULT_PORT
+export DEFAULT_PORT SCAN_TIMEOUT
 
 scan_lan() {
   local subnet
