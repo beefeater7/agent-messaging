@@ -54,6 +54,9 @@ ensure_hosts() {
   hosts=$(collect_hosts)
   if [[ -z $hosts ]]; then
     hosts=$(scan_lan 2>/dev/null)
+    if [[ -n $hosts ]] && { [[ ! -e "$HOSTS_FILE" ]] || [[ -w "$HOSTS_FILE" ]]; }; then
+      printf '%s\n' "$hosts" > "$HOSTS_FILE"
+    fi
   fi
   printf '%s' "$hosts"
 }
