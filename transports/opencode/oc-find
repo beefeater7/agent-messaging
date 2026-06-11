@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
 usage() {
   cat <<'EOF'
 Usage:
   oc-find <session-id>         Resolve session to hostname
-  oc-find --hosts              List known hosts with online status
+  oc-find --hosts              List hosts (scans LAN if no hosts file)
   oc-find --scan               Scan LAN for active opencode hosts
   oc-find --help               Show this message
 
 Finds which host a session ID belongs to by querying known hosts'
-GET /session endpoints. Hosts are read from ~/.config/opencode/hosts
-(one hostname per line, # for comments).
+GET /session endpoints. If no hosts file exists, falls back to a LAN
+scan. Hosts file format: one hostname per line, # for comments.
+
+Hosts file location: $OC_FIND_HOSTS or ./hosts (in the script directory).
 
 Examples:
   oc-find ses_1772f63b4ffeIP7VTiEHaHZdQI
@@ -20,7 +24,7 @@ Examples:
 EOF
 }
 
-HOSTS_FILE="$HOME/.config/opencode/hosts"
+HOSTS_FILE="${OC_FIND_HOSTS:-$script_dir/hosts}"
 SESSION_ENDPOINT="/session"
 DEFAULT_PORT=4096
 SCAN_OCTETS_START=4
@@ -43,6 +47,15 @@ collect_hosts() {
     done < "$HOSTS_FILE"
   fi
   printf '%s\n' "${hosts[@]}"
+}
+
+ensure_hosts() {
+  local hosts
+  hosts=$(collect_hosts)
+  if [[ -z $hosts ]]; then
+    hosts=$(scan_lan 2>/dev/null)
+  fi
+  printf '%s' "$hosts"
 }
 
 # ── session lookup ─────────────────────────────────────────────────
@@ -75,8 +88,8 @@ check_host() {
 
 show_hosts() {
   local hosts host status
-  hosts=$(collect_hosts)
-  [[ -n $hosts ]] || die "no hosts configured (create $HOSTS_FILE)"
+  hosts=$(ensure_hosts)
+  [[ -n $hosts ]] || die "no hosts found on LAN and no hosts file ($HOSTS_FILE)"
   while IFS= read -r host; do
     [[ -n $host ]] || continue
     status=$(check_host "$host") || true
@@ -131,8 +144,8 @@ session_id="${1:-}"
 [[ -n $session_id ]] || die "session ID required (use --help)"
 [[ "$session_id" == ses_* ]] || die "invalid session ID: $session_id"
 
-hosts=$(collect_hosts)
-[[ -n $hosts ]] || die "no hosts configured (create $HOSTS_FILE)"
+hosts=$(ensure_hosts)
+[[ -n $hosts ]] || die "no hosts found on LAN and no hosts file ($HOSTS_FILE)"
 
 while IFS= read -r host; do
   [[ -n $host ]] || continue
